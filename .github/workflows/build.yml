@@ -19,16 +19,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Theos
+      - name: Install dependencies
         shell: bash
         run: |
           set -euo pipefail
-          git clone --recursive --depth 1 https://github.com/theos/theos.git "$HOME/theos"
+
+          brew update
+          brew install ldid
+
+          git clone --recursive --depth 1 \
+            https://github.com/theos/theos.git \
+            "$HOME/theos"
 
       - name: Build AddSpeedHack
         shell: bash
         run: |
           set -euo pipefail
+
           export THEOS="$HOME/theos"
 
           VERSION="$(tr -d '[:space:]' < VERSION)"
