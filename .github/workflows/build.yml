@@ -48,13 +48,17 @@ jobs:
           make clean
           make
 
-          DYLIB="$(find .theos -type f -name 'AddSpeedHack.dylib' | head -n 1 || true)"
+          DYLIB="$(find .theos -type f -name 'AddSpeedHack.dylib' \
+            ! -path '*.dSYM/*' \
+            | head -n 1 || true)"
 
           if [ -z "$DYLIB" ]; then
             echo "AddSpeedHack.dylib was not produced."
-            find .theos -maxdepth 6 -type f -print || true
+            find .theos -maxdepth 8 -type f -print || true
             exit 1
           fi
+
+          echo "Using dylib: $DYLIB"
 
           mkdir -p output
 
@@ -65,6 +69,7 @@ jobs:
           echo "OUT=$OUT" >> "$GITHUB_ENV"
 
           file "$OUT"
+          lipo -info "$OUT" || true
           ls -lh "$OUT"
 
       - name: Upload AddSpeedHack
