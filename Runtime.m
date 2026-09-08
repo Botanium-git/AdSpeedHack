@@ -3,6 +3,95 @@
 #import <WebKit/WebKit.h>
 #import <objc/runtime.h>
 
+static NSString * const kAddSpeedHackVersion = @"1.1.0";
+static NSString * const kAddSpeedHackLogDirectory = @"AddSpeedHackLogs";
+static NSString * const kAddSpeedHackLogFile = @"addspeedhack_v1.1.jsonl";
+
+static dispatch_queue_t AddSpeedHackLogQueue(void)
+{
+    static dispatch_queue_t queue;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        queue = dispatch_queue_create("com.addspeedhack.log", DISPATCH_QUEUE_SERIAL);
+    });
+    return queue;
+}
+
+static NSString *AddSpeedHackLogPath(void)
+{
+    NSArray<NSString *> *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+    NSString *documents = paths.firstObject;
+    if (documents.length == 0) return nil;
+
+    NSString *directory = [documents stringByAppendingPathComponent:kAddSpeedHackLogDirectory];
+    return [directory stringByAppendingPathComponent:kAddSpeedHackLogFile];
+}
+
+static NSString *AddSpeedHackTimestamp(void)
+{
+    static NSISO8601DateFormatter *formatter;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        formatter = [[NSISO8601DateFormatter alloc] init];
+        formatter.formatOptions = NSISO8601DateFormatWithInternetDateTime | NSISO8601DateFormatWithFractionalSeconds;
+    });
+    return [formatter stringFromDate:[NSDate date]];
+}
+
+static void AddSpeedHackWriteLog(NSDictionary *fields)
+{
+    if (![fields isKindOfClass:[NSDictionary class]]) return;
+
+    NSMutableDictionary *record = [NSMutableDictionary dictionaryWithDictionary:fields];
+    record[@"timestamp"] = AddSpeedHackTimestamp();
+    record[@"version"] = kAddSpeedHackVersion;
+
+    NSString *bundleID = NSBundle.mainBundle.bundleIdentifier;
+    if (bundleID.length > 0) record[@"bundle_id"] = bundleID;
+
+    NSString *processName = NSProcessInfo.processInfo.processName;
+    if (processName.length > 0) record[@"process"] = processName;
+
+    dispatch_async(AddSpeedHackLogQueue(), ^{
+        @autoreleasepool {
+            NSError *jsonError = nil;
+            NSData *json = [NSJSONSerialization dataWithJSONObject:record options:0 error:&jsonError];
+            if (!json || jsonError) return;
+
+            NSString *path = AddSpeedHackLogPath();
+            if (path.length == 0) return;
+
+            NSString *directory = [path stringByDeletingLastPathComponent];
+            NSError *directoryError = nil;
+            [[NSFileManager defaultManager] createDirectoryAtPath:directory
+                                      withIntermediateDirectories:YES
+                                                       attributes:nil
+                                                            error:&directoryError];
+            if (directoryError) return;
+
+            NSMutableData *line = [NSMutableData dataWithData:json];
+            const char newline = '\n';
+            [line appendBytes:&newline length:1];
+
+            if (![[NSFileManager defaultManager] fileExistsAtPath:path]) {
+                [line writeToFile:path atomically:YES];
+                return;
+            }
+
+            NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
+            if (!handle) return;
+
+            @try {
+                [handle seekToEndOfFile];
+                [handle writeData:line];
+                [handle closeFile];
+            } @catch (__unused NSException *exception) {
+                @try { [handle closeFile]; } @catch (__unused NSException *closeException) {}
+            }
+        }
+    });
+}
+
 static const float kAVPlayerMultiplier = 600.0f;
 static const double kHTML5PlaybackRate = 16.0;
 static const double kVideoSeekStep = 0.75;
@@ -189,12 +278,120 @@ static NSString *AdSpeedHTML5Script(void)
     ];
 }
 
-static void InjectIntoWKWebView(WKWebView *webView)
+static NSString *AdSpeedDiagnosticScript(void)
+{
+    return @"(function(){"
+    "try{"
+    "var videos=[];"
+    "var vs=document.querySelectorAll('video');"
+    "for(var i=0;i<vs.length;i++){"
+    "var v=vs[i];"
+    "videos.push({"
+    "src:String(v.currentSrc||v.src||''),"
+    "duration:(isFinite(v.duration)?Number(v.duration):null),"
+    "currentTime:(isFinite(v.currentTime)?Number(v.currentTime):null),"
+    "playbackRate:(isFinite(v.playbackRate)?Number(v.playbackRate):null),"
+    "paused:!!v.paused,"
+    "ended:!!v.ended"
+    "});"
+    "}"
+    "var canvasCount=0;"
+    "try{canvasCount=document.querySelectorAll('canvas').length;}catch(e){}"
+    "var iframeCount=0;"
+    "try{iframeCount=document.querySelectorAll('iframe').length;}catch(e){}"
+    "return {"
+    "page_url:String(location.href||''),"
+    "video_count:vs.length,"
+    "canvas_count:canvasCount,"
+    "iframe_count:iframeCount,"
+    "videos:videos,"
+    "runtime_installed:!!window.__adspeed_runtime_v2,"
+    "timer_acceleration_installed:!!window.__adspeed_timers_installed,"
+    "video_seek_installed:!!window.__adspeed_seek_timer,"
+    "canvas_poke_applied:!!window.__adspeed_canvas_poked"
+    "};"
+    "}catch(e){return {diagnostic_error:String(e)};}"
+    "})();";
+}
+
+static const void *kAddSpeedHackWKHandledSurfaceKey = &kAddSpeedHackWKHandledSurfaceKey;
+static const void *kAddSpeedHackWKSessionKey = &kAddSpeedHackWKSessionKey;
+static const void *kAddSpeedHackAVLoggedKey = &kAddSpeedHackAVLoggedKey;
+
+static void AddSpeedHackProbeWKWebView(WKWebView *webView, NSTimeInterval delay, NSString *sessionID)
+{
+    if (!webView) return;
+
+    [webView evaluateJavaScript:AdSpeedDiagnosticScript()
+              completionHandler:^(id result, NSError *error) {
+        NSMutableDictionary *record = [NSMutableDictionary dictionary];
+        record[@"event"] = @"wk_probe";
+        record[@"probe_delay_seconds"] = @(delay);
+        record[@"session_id"] = sessionID ?: @"";
+
+        NSString *currentSessionID = objc_getAssociatedObject(webView, kAddSpeedHackWKSessionKey);
+        BOOL isCurrentSession = (sessionID.length > 0 && [currentSessionID isEqualToString:sessionID]);
+        record[@"current_navigation_session"] = @(isCurrentSession);
+
+        NSString *nativeURL = webView.URL.absoluteString;
+        if (nativeURL.length > 0) record[@"native_page_url"] = nativeURL;
+
+        BOOL knownSurface = NO;
+        if ([result isKindOfClass:[NSDictionary class]]) {
+            NSDictionary *snapshot = (NSDictionary *)result;
+            [record addEntriesFromDictionary:snapshot];
+
+            NSInteger videoCount = [snapshot[@"video_count"] integerValue];
+            NSInteger canvasCount = [snapshot[@"canvas_count"] integerValue];
+            NSInteger iframeCount = [snapshot[@"iframe_count"] integerValue];
+            BOOL runtimeInstalled = [snapshot[@"runtime_installed"] boolValue];
+            BOOL canvasPokeApplied = [snapshot[@"canvas_poke_applied"] boolValue];
+
+            record[@"html5_video_detected"] = @(videoCount > 0);
+            record[@"html5_acceleration_applied"] = @(videoCount > 0 && runtimeInstalled);
+            record[@"canvas_playable_detected"] = @(canvasCount > 0);
+            record[@"canvas_processing_applied"] = @(canvasPokeApplied);
+            record[@"iframe_detected"] = @(iframeCount > 0);
+
+            knownSurface = (videoCount > 0 || canvasCount > 0);
+            record[@"handled_html_surface_detected_this_probe"] = @(knownSurface);
+            record[@"iframe_only_candidate"] = @(iframeCount > 0 && videoCount == 0 && canvasCount == 0);
+
+            if (knownSurface && isCurrentSession) {
+                objc_setAssociatedObject(webView,
+                                         kAddSpeedHackWKHandledSurfaceKey,
+                                         @YES,
+                                         OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            }
+        } else if (error) {
+            record[@"diagnostic_error"] = error.localizedDescription ?: @"unknown";
+        }
+
+        record[@"known_surface_detected_this_probe"] = @(knownSurface);
+        AddSpeedHackWriteLog(record);
+
+        if (delay >= kProbeDelays[kProbeDelayCount - 1] && isCurrentSession) {
+            BOOL everSawHandledSurface = [objc_getAssociatedObject(webView, kAddSpeedHackWKHandledSurfaceKey) boolValue];
+            AddSpeedHackWriteLog(@{
+                @"event": @"wk_coverage_summary",
+                @"session_id": sessionID ?: @"",
+                @"native_page_url": nativeURL ?: @"",
+                @"handled_html_surface_seen": @(everSawHandledSurface),
+                @"no_handled_html_surface_observed": @(!everSawHandledSurface),
+                @"note": @"Observation only. This is not a reward-success or reward-failure judgment."
+            });
+        }
+    }];
+}
+
+static void InjectIntoWKWebView(WKWebView *webView, NSTimeInterval delay, NSString *sessionID)
 {
     if (!webView) return;
     dispatch_async(dispatch_get_main_queue(), ^{
         [webView evaluateJavaScript:AdSpeedHTML5Script()
-                  completionHandler:nil];
+                  completionHandler:^(__unused id result, __unused NSError *error) {
+            AddSpeedHackProbeWKWebView(webView, delay, sessionID);
+        }];
     });
 }
 
@@ -202,6 +399,22 @@ static void ScheduleWKWebViewInjection(WKWebView *webView)
 {
     if (!webView) return;
     __weak WKWebView *weakWebView = webView;
+
+    NSString *sessionID = NSUUID.UUID.UUIDString;
+    objc_setAssociatedObject(webView,
+                             kAddSpeedHackWKSessionKey,
+                             sessionID,
+                             OBJC_ASSOCIATION_COPY_NONATOMIC);
+    objc_setAssociatedObject(webView,
+                             kAddSpeedHackWKHandledSurfaceKey,
+                             @NO,
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    AddSpeedHackWriteLog(@{
+        @"event": @"wk_navigation_scheduled",
+        @"session_id": sessionID,
+        @"native_page_url": webView.URL.absoluteString ?: @""
+    });
 
     for (NSUInteger i = 0; i < kProbeDelayCount; i++) {
         NSTimeInterval delay = kProbeDelays[i];
@@ -211,7 +424,7 @@ static void ScheduleWKWebViewInjection(WKWebView *webView)
             dispatch_get_main_queue(),
             ^{
                 WKWebView *strongWebView = weakWebView;
-                if (strongWebView) InjectIntoWKWebView(strongWebView);
+                if (strongWebView) InjectIntoWKWebView(strongWebView, delay, sessionID);
             }
         );
     }
@@ -251,6 +464,19 @@ static void SwizzleInstanceMethod(Class cls, SEL originalSEL, SEL replacementSEL
 
 - (void)adspeed_setRate:(float)rate
 {
+    if (rate != 0.0f && ![objc_getAssociatedObject(self, kAddSpeedHackAVLoggedKey) boolValue]) {
+        objc_setAssociatedObject(self,
+                                 kAddSpeedHackAVLoggedKey,
+                                 @YES,
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        AddSpeedHackWriteLog(@{
+            @"event": @"avplayer_acceleration_applied",
+            @"requested_rate": @(rate),
+            @"multiplier": @(kAVPlayerMultiplier),
+            @"applied_rate": @(rate * kAVPlayerMultiplier)
+        });
+    }
+
     [self adspeed_setRate:(rate * kAVPlayerMultiplier)];
 }
 
@@ -319,6 +545,12 @@ __attribute__((constructor))
 static void AdSpeedInit(void)
 {
     @autoreleasepool {
+        AddSpeedHackWriteLog(@{
+            @"event": @"runtime_loaded",
+            @"log_file": @"Documents/AddSpeedHackLogs/addspeedhack_v1.1.jsonl",
+            @"reward_inference_enabled": @NO
+        });
+
         Class avPlayerClass = objc_getClass("AVPlayer");
         if (avPlayerClass) {
             SwizzleInstanceMethod(avPlayerClass, @selector(setRate:), @selector(adspeed_setRate:));
