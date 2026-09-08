@@ -1,0 +1,68 @@
+name: Build AddSpeedHack
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "Runtime.m"
+      - "Makefile"
+      - "VERSION"
+      - ".github/workflows/build.yml"
+
+jobs:
+  build:
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Theos
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --recursive --depth 1 https://github.com/theos/theos.git "$HOME/theos"
+
+      - name: Build AddSpeedHack
+        shell: bash
+        run: |
+          set -euo pipefail
+          export THEOS="$HOME/theos"
+
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+
+          if [ -z "$VERSION" ]; then
+            echo "VERSION is empty."
+            exit 1
+          fi
+
+          make clean
+          make
+
+          DYLIB="$(find .theos -type f -name 'AddSpeedHack.dylib' | head -n 1 || true)"
+
+          if [ -z "$DYLIB" ]; then
+            echo "AddSpeedHack.dylib was not produced."
+            find .theos -maxdepth 6 -type f -print || true
+            exit 1
+          fi
+
+          mkdir -p output
+
+          OUT="output/AddSpeedHack-v${VERSION}.dylib"
+          cp "$DYLIB" "$OUT"
+
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "OUT=$OUT" >> "$GITHUB_ENV"
+
+          file "$OUT"
+          ls -lh "$OUT"
+
+      - name: Upload AddSpeedHack
+        uses: actions/upload-artifact@v4
+        with:
+          name: AddSpeedHack-v${{ env.VERSION }}
+          path: ${{ env.OUT }}
+          if-no-files-found: error
