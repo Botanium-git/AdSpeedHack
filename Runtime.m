@@ -3,11 +3,11 @@
 #import <WebKit/WebKit.h>
 #import <objc/runtime.h>
 
-static NSString * const kAddSpeedHackVersion = @"1.2.4";
+static NSString * const kAddSpeedHackVersion = @"1.2.5";
 static NSString * const kAddSpeedHackLogDirectory = @"AdSpeedHackLogs";
-static NSString * const kAddSpeedHackVersionDirectory = @"ver.1.2.4";
-static NSString * const kAddSpeedHackLogStem = @"ASH_ver.1.2.4_log";
-static NSString * const kAddSpeedHackBatchStem = @"ASH_ver.1.2.4_batch";
+static NSString * const kAddSpeedHackVersionDirectory = @"ver.1.2.5";
+static NSString * const kAddSpeedHackLogStem = @"ASH_ver.1.2.5_log";
+static NSString * const kAddSpeedHackBatchStem = @"ASH_ver.1.2.5_batch";
 
 static dispatch_queue_t AddSpeedHackLogQueue(void)
 {
@@ -643,24 +643,133 @@ static const void *kAddSpeedHackWKHandledSurfaceKey = &kAddSpeedHackWKHandledSur
 static const void *kAddSpeedHackWKSessionKey = &kAddSpeedHackWKSessionKey;
 static const void *kAddSpeedHackWKLogStartedKey = &kAddSpeedHackWKLogStartedKey;
 static const void *kAddSpeedHackWKLogPathKey = &kAddSpeedHackWKLogPathKey;
+static const void *kAddSpeedHackWKWeakEvidenceKey = &kAddSpeedHackWKWeakEvidenceKey;
+static const void *kAddSpeedHackWKParticipantKey = &kAddSpeedHackWKParticipantKey;
 static const void *kAddSpeedHackAVLoggedKey = &kAddSpeedHackAVLoggedKey;
+
+// v1.2.5: one parent ad session owns one log file. Individual WKWebViews join it.
+static NSString *gAddSpeedHackAdSessionID = nil;
+static NSString *gAddSpeedHackAdSessionLogPath = nil;
+static NSString *gAddSpeedHackAdSessionConfidence = nil;
+static NSUInteger gAddSpeedHackAdSessionWeakSourceCount = 0;
+static NSTimeInterval gAddSpeedHackAdSessionLastEvidenceTime = 0;
+static NSHashTable<WKWebView *> *gAddSpeedHackAdSessionParticipants = nil;
+static const NSTimeInterval kAddSpeedHackAdSessionStaleSeconds = 40.0;
+
+static NSTimeInterval AddSpeedHackNow(void)
+{
+    return [NSDate timeIntervalSinceReferenceDate];
+}
+
+static void AddSpeedHackResetAdSessionState(void)
+{
+    NSString *oldPath = gAddSpeedHackAdSessionLogPath;
+    for (WKWebView *webView in gAddSpeedHackAdSessionParticipants.allObjects) {
+        objc_setAssociatedObject(webView, kAddSpeedHackWKLogPathKey, nil, OBJC_ASSOCIATION_COPY_NONATOMIC);
+        objc_setAssociatedObject(webView, kAddSpeedHackWKLogStartedKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(webView, kAddSpeedHackWKWeakEvidenceKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(webView, kAddSpeedHackWKParticipantKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    if ([gAddSpeedHackActiveLogPath isEqualToString:oldPath]) gAddSpeedHackActiveLogPath = nil;
+    gAddSpeedHackAdSessionID = nil;
+    gAddSpeedHackAdSessionLogPath = nil;
+    gAddSpeedHackAdSessionConfidence = nil;
+    gAddSpeedHackAdSessionWeakSourceCount = 0;
+    gAddSpeedHackAdSessionLastEvidenceTime = 0;
+    gAddSpeedHackAdSessionParticipants = nil;
+}
+
+static void AddSpeedHackEndAdSession(NSString *reason)
+{
+    NSString *path = gAddSpeedHackAdSessionLogPath;
+    if (path.length) {
+        AddSpeedHackWriteLogToPath(@{
+            @"event": @"ad_session_ended",
+            @"ad_session_id": gAddSpeedHackAdSessionID ?: @"",
+            @"confidence": gAddSpeedHackAdSessionConfidence ?: @"low",
+            @"weak_source_count": @(gAddSpeedHackAdSessionWeakSourceCount),
+            @"end_reason": reason ?: @"unknown"
+        }, path);
+    }
+    AddSpeedHackResetAdSessionState();
+}
+
+static BOOL AddSpeedHackAdSessionIsStale(void)
+{
+    if (gAddSpeedHackAdSessionLogPath.length == 0 || gAddSpeedHackAdSessionLastEvidenceTime <= 0) return NO;
+    return (AddSpeedHackNow() - gAddSpeedHackAdSessionLastEvidenceTime) > kAddSpeedHackAdSessionStaleSeconds;
+}
+
+static NSString *AddSpeedHackEnsureAdSession(WKWebView *webView, BOOL strongEvidence, BOOL weakEvidence, NSString *reason)
+{
+    if (!strongEvidence && !weakEvidence) return nil;
+
+    if (AddSpeedHackAdSessionIsStale()) AddSpeedHackEndAdSession(@"stale_before_new_evidence");
+
+    BOOL created = NO;
+    if (gAddSpeedHackAdSessionLogPath.length == 0) {
+        __block NSString *newPath = nil;
+        dispatch_sync(AddSpeedHackLogQueue(), ^{ newPath = AddSpeedHackNewLogPath(); });
+        if (newPath.length == 0) return nil;
+
+        gAddSpeedHackAdSessionID = NSUUID.UUID.UUIDString;
+        gAddSpeedHackAdSessionLogPath = newPath;
+        gAddSpeedHackAdSessionConfidence = strongEvidence ? @"high" : @"low";
+        gAddSpeedHackAdSessionWeakSourceCount = 0;
+        gAddSpeedHackAdSessionParticipants = [NSHashTable weakObjectsHashTable];
+        created = YES;
+        gAddSpeedHackActiveLogPath = newPath;
+    }
+
+    if (!gAddSpeedHackAdSessionParticipants) gAddSpeedHackAdSessionParticipants = [NSHashTable weakObjectsHashTable];
+    if (webView) {
+        [gAddSpeedHackAdSessionParticipants addObject:webView];
+        objc_setAssociatedObject(webView, kAddSpeedHackWKParticipantKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(webView, kAddSpeedHackWKLogPathKey, gAddSpeedHackAdSessionLogPath, OBJC_ASSOCIATION_COPY_NONATOMIC);
+        objc_setAssociatedObject(webView, kAddSpeedHackWKLogStartedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+        if (weakEvidence && ![objc_getAssociatedObject(webView, kAddSpeedHackWKWeakEvidenceKey) boolValue]) {
+            objc_setAssociatedObject(webView, kAddSpeedHackWKWeakEvidenceKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            gAddSpeedHackAdSessionWeakSourceCount++;
+        }
+    }
+
+    NSString *oldConfidence = gAddSpeedHackAdSessionConfidence ?: @"low";
+    if (strongEvidence) {
+        gAddSpeedHackAdSessionConfidence = @"high";
+    } else if (gAddSpeedHackAdSessionWeakSourceCount >= 2 && ![oldConfidence isEqualToString:@"high"]) {
+        gAddSpeedHackAdSessionConfidence = @"medium";
+    }
+    gAddSpeedHackAdSessionLastEvidenceTime = AddSpeedHackNow();
+
+    if (created) {
+        AddSpeedHackWriteLogToPath(@{
+            @"event": @"ad_session_started",
+            @"ad_session_id": gAddSpeedHackAdSessionID ?: @"",
+            @"confidence": gAddSpeedHackAdSessionConfidence ?: @"low",
+            @"start_reason": reason ?: @"unknown",
+            @"state": strongEvidence ? @"confirmed" : @"pending"
+        }, gAddSpeedHackAdSessionLogPath);
+    } else if (![oldConfidence isEqualToString:gAddSpeedHackAdSessionConfidence]) {
+        AddSpeedHackWriteLogToPath(@{
+            @"event": @"ad_session_confidence_changed",
+            @"ad_session_id": gAddSpeedHackAdSessionID ?: @"",
+            @"from": oldConfidence,
+            @"to": gAddSpeedHackAdSessionConfidence ?: @"low",
+            @"reason": reason ?: @"additional_evidence",
+            @"weak_source_count": @(gAddSpeedHackAdSessionWeakSourceCount)
+        }, gAddSpeedHackAdSessionLogPath);
+    }
+
+    return gAddSpeedHackAdSessionLogPath;
+}
 
 static NSString *AddSpeedHackLogPathForWebView(WKWebView *webView, BOOL createIfNeeded)
 {
     if (!webView) return nil;
     NSString *path = objc_getAssociatedObject(webView, kAddSpeedHackWKLogPathKey);
     if (path.length || !createIfNeeded) return path;
-
-    __block NSString *newPath = nil;
-    dispatch_sync(AddSpeedHackLogQueue(), ^{
-        newPath = AddSpeedHackNewLogPath();
-    });
-    if (newPath.length) {
-        objc_setAssociatedObject(webView, kAddSpeedHackWKLogPathKey, newPath, OBJC_ASSOCIATION_COPY_NONATOMIC);
-        objc_setAssociatedObject(webView, kAddSpeedHackWKLogStartedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        gAddSpeedHackActiveLogPath = newPath;
-    }
-    return newPath;
+    return gAddSpeedHackAdSessionLogPath;
 }
 
 static void AddSpeedHackProbeWKWebView(WKWebView *webView, NSTimeInterval delay, NSString *sessionID)
@@ -715,19 +824,19 @@ static void AddSpeedHackProbeWKWebView(WKWebView *webView, NSTimeInterval delay,
         record[@"known_surface_detected_this_probe"] = @(knownSurface);
 
         BOOL iframeOnlyCandidate = [record[@"iframe_only_candidate"] boolValue];
-        BOOL adEvidence = knownSurface || iframeOnlyCandidate;
+        BOOL strongEvidence = knownSurface;
+        BOOL weakEvidence = iframeOnlyCandidate;
+        NSString *reason = strongEvidence ? @"handled_html_surface" : (weakEvidence ? @"iframe_only_candidate" : @"none");
+
         NSString *logPath = AddSpeedHackLogPathForWebView(webView, NO);
+        if (strongEvidence || weakEvidence) {
+            logPath = AddSpeedHackEnsureAdSession(webView, strongEvidence, weakEvidence, reason);
+        }
         BOOL logStarted = (logPath.length > 0);
-        if (adEvidence && !logStarted) {
-            logPath = AddSpeedHackLogPathForWebView(webView, YES);
-            logStarted = (logPath.length > 0);
-            if (logStarted) {
-                NSMutableDictionary *startRecord = [record mutableCopy];
-                startRecord[@"event"] = @"ad_log_started";
-                startRecord[@"start_reason"] = knownSurface ? @"handled_html_surface" : @"iframe_only_candidate";
-                AddSpeedHackWriteLogToPath(startRecord, logPath);
-            }
-        } else if (logStarted) {
+        if (logStarted) {
+            record[@"ad_session_id"] = gAddSpeedHackAdSessionID ?: @"";
+            record[@"ad_session_confidence"] = gAddSpeedHackAdSessionConfidence ?: @"low";
+            record[@"ad_evidence_strength"] = strongEvidence ? @"strong" : (weakEvidence ? @"weak" : @"none");
             AddSpeedHackWriteLogToPath(record, logPath);
         }
 
@@ -835,12 +944,17 @@ static void SwizzleInstanceMethod(Class cls, SEL originalSEL, SEL replacementSEL
                                  kAddSpeedHackAVLoggedKey,
                                  @YES,
                                  OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        AddSpeedHackWriteLog(@{
-            @"event": @"avplayer_acceleration_applied",
-            @"requested_rate": @(rate),
-            @"multiplier": @(kAVPlayerMultiplier),
-            @"applied_rate": @(rate * kAVPlayerMultiplier)
-        });
+        NSString *logPath = AddSpeedHackEnsureAdSession(nil, YES, NO, @"avplayer_activity");
+        if (logPath.length) {
+            AddSpeedHackWriteLogToPath(@{
+                @"event": @"avplayer_acceleration_applied",
+                @"ad_session_id": gAddSpeedHackAdSessionID ?: @"",
+                @"ad_session_confidence": gAddSpeedHackAdSessionConfidence ?: @"high",
+                @"requested_rate": @(rate),
+                @"multiplier": @(kAVPlayerMultiplier),
+                @"applied_rate": @(rate * kAVPlayerMultiplier)
+            }, logPath);
+        }
     }
 
     [self adspeed_setRate:(rate * kAVPlayerMultiplier)];
@@ -860,6 +974,8 @@ static void SwizzleInstanceMethod(Class cls, SEL originalSEL, SEL replacementSEL
 - (WKNavigation *)adspeed_loadFileURL:(NSURL *)URL allowingReadAccessToURL:(NSURL *)readAccessURL;
 - (WKNavigation *)adspeed_reload;
 - (WKNavigation *)adspeed_reloadFromOrigin;
+- (void)adspeed_removeFromSuperview;
+- (void)adspeed_didMoveToWindow;
 @end
 
 @implementation WKWebView (AdSpeedHackRuntime)
@@ -905,6 +1021,43 @@ static void SwizzleInstanceMethod(Class cls, SEL originalSEL, SEL replacementSEL
     ScheduleWKWebViewInjection(self, NO, self.URL.absoluteString, @"reloadFromOrigin");
     return navigation;
 }
+
+- (void)adspeed_removeFromSuperview
+{
+    BOOL wasParticipant = [objc_getAssociatedObject(self, kAddSpeedHackWKParticipantKey) boolValue];
+    NSString *path = objc_getAssociatedObject(self, kAddSpeedHackWKLogPathKey);
+    [self adspeed_removeFromSuperview];
+
+    if (wasParticipant && path.length && [path isEqualToString:gAddSpeedHackAdSessionLogPath]) {
+        [gAddSpeedHackAdSessionParticipants removeObject:self];
+        AddSpeedHackWriteLogToPath(@{
+            @"event": @"ad_webview_removed",
+            @"ad_session_id": gAddSpeedHackAdSessionID ?: @"",
+            @"native_page_url": self.URL.absoluteString ?: @""
+        }, path);
+        if (gAddSpeedHackAdSessionParticipants.allObjects.count == 0) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                if (gAddSpeedHackAdSessionParticipants.allObjects.count == 0 && [path isEqualToString:gAddSpeedHackAdSessionLogPath]) {
+                    AddSpeedHackEndAdSession(@"last_participating_webview_removed");
+                }
+            });
+        }
+    }
+}
+
+- (void)adspeed_didMoveToWindow
+{
+    [self adspeed_didMoveToWindow];
+    BOOL wasParticipant = [objc_getAssociatedObject(self, kAddSpeedHackWKParticipantKey) boolValue];
+    NSString *path = objc_getAssociatedObject(self, kAddSpeedHackWKLogPathKey);
+    if (wasParticipant && self.window == nil && path.length && [path isEqualToString:gAddSpeedHackAdSessionLogPath]) {
+        AddSpeedHackWriteLogToPath(@{
+            @"event": @"ad_webview_detached_from_window",
+            @"ad_session_id": gAddSpeedHackAdSessionID ?: @"",
+            @"native_page_url": self.URL.absoluteString ?: @""
+        }, path);
+    }
+}
 @end
 
 __attribute__((constructor))
@@ -925,6 +1078,8 @@ static void AdSpeedInit(void)
             SwizzleInstanceMethod(wkWebViewClass, @selector(loadFileURL:allowingReadAccessToURL:), @selector(adspeed_loadFileURL:allowingReadAccessToURL:));
             SwizzleInstanceMethod(wkWebViewClass, @selector(reload), @selector(adspeed_reload));
             SwizzleInstanceMethod(wkWebViewClass, @selector(reloadFromOrigin), @selector(adspeed_reloadFromOrigin));
+            SwizzleInstanceMethod(wkWebViewClass, @selector(removeFromSuperview), @selector(adspeed_removeFromSuperview));
+            SwizzleInstanceMethod(wkWebViewClass, @selector(didMoveToWindow), @selector(adspeed_didMoveToWindow));
         }
     }
 }

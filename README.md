@@ -1,6 +1,6 @@
 # AddSpeedHack
 
-Current version: **v1.0.0**
+Current version: **v1.2.5**
 
 This starts from the known v2 runtime behavior.
 
@@ -38,3 +38,13 @@ Suggested numbering:
 - small fix/logging change: 1.0.1, 1.0.2, ...
 - new feature: 1.1.0, 1.2.0, ...
 - major redesign: 2.0.0
+
+
+## v1.2.5
+
+- Parent ad-session logging: multiple WKWebViews from one ad share one JSONL file.
+- Strong evidence (`video` / `canvas`) confirms the session immediately.
+- Weak `iframe_only_candidate` evidence starts a low-confidence pending session instead of being discarded.
+- Multiple weak sources can promote confidence to medium; strong evidence promotes to high.
+- Adds WebView detach/removal observations and closes a session when its last participating WebView is removed.
+- Keeps a stale-session fallback so a later unrelated ad can start a fresh log.
