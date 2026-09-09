@@ -1,4 +1,4 @@
-name: Build AddSpeedHack
+name: Build AdSpeedHack
 
 on:
   workflow_dispatch:
@@ -31,7 +31,7 @@ jobs:
             https://github.com/theos/theos.git \
             "$HOME/theos"
 
-      - name: Build AddSpeedHack
+      - name: Build AdSpeedHack
         shell: bash
         run: |
           set -euo pipefail
@@ -48,12 +48,12 @@ jobs:
           make clean
           make
 
-          DYLIB="$(find .theos -type f -name 'AddSpeedHack.dylib' \
+          DYLIB="$(find .theos -type f -name 'AdSpeedHack.dylib' \
             ! -path '*.dSYM/*' \
             | head -n 1 || true)"
 
           if [ -z "$DYLIB" ]; then
-            echo "AddSpeedHack.dylib was not produced."
+            echo "AdSpeedHack.dylib was not produced."
             find .theos -maxdepth 8 -type f -print || true
             exit 1
           fi
@@ -62,7 +62,7 @@ jobs:
 
           mkdir -p output
 
-          OUT="output/AddSpeedHack-v${VERSION}.dylib"
+          OUT="output/AdSpeedHack_ver.${VERSION}.dylib"
           cp "$DYLIB" "$OUT"
 
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
@@ -72,9 +72,9 @@ jobs:
           lipo -info "$OUT" || true
           ls -lh "$OUT"
 
-      - name: Upload AddSpeedHack
+      - name: Upload AdSpeedHack
         uses: actions/upload-artifact@v4
         with:
-          name: AddSpeedHack-v${{ env.VERSION }}
+          name: AdSpeedHack_ver.${{ env.VERSION }}
           path: ${{ env.OUT }}
           if-no-files-found: error
