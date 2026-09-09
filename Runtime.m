@@ -358,11 +358,6 @@ static void AddSpeedHackWriteLogToPath(NSDictionary *fields, NSString *path)
     });
 }
 
-static void AddSpeedHackWriteLog(NSDictionary *fields)
-{
-    AddSpeedHackWriteLogInternal(fields, NO, nil);
-}
-
 static const float kAVPlayerMultiplier = 600.0f;
 static const double kHTML5PlaybackRate = 16.0;
 static const double kVideoSeekStep = 0.75;
