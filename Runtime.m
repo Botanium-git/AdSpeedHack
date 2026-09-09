@@ -3,11 +3,11 @@
 #import <WebKit/WebKit.h>
 #import <objc/runtime.h>
 
-static NSString * const kAddSpeedHackVersion = @"1.3.0";
+static NSString * const kAddSpeedHackVersion = @"1.4.0";
 static NSString * const kAddSpeedHackLogDirectory = @"AdSpeedHackLogs";
-static NSString * const kAddSpeedHackVersionDirectory = @"ver.1.3.0";
-static NSString * const kAddSpeedHackLogStem = @"ASH_ver.1.3.0_log";
-static NSString * const kAddSpeedHackBatchStem = @"ASH_ver.1.3.0_batch";
+static NSString * const kAddSpeedHackVersionDirectory = @"ver.1.4.0";
+static NSString * const kAddSpeedHackLogStem = @"ASH_ver.1.4.0_log";
+static NSString * const kAddSpeedHackBatchStem = @"ASH_ver.1.4.0_batch";
 
 static dispatch_queue_t AddSpeedHackLogQueue(void)
 {
@@ -418,6 +418,9 @@ static void AddSpeedHackWriteLogToPath(NSDictionary *fields, NSString *path)
 
 static const float kAVPlayerMultiplier = 600.0f;
 static const double kHTML5PlaybackRate = 16.0;
+static const double kHTML5FastUntilFraction = 0.95;
+static const double kHTML5NormalTailSeconds = 5.0;
+static const double kHTML5NormalTailRate = 1.0;
 static const double kVideoSeekStep = 0.75;
 static const double kVideoSeekIntervalMs = 100.0;
 static const double kPlayableTimerSpeed = 8.0;
@@ -436,6 +439,9 @@ static NSString *AdSpeedHTML5Script(void)
         @"(function(){"
         "try{"
         "var VIDEO_RATE=%0.3f;"
+        "var FAST_UNTIL_FRACTION=%0.5f;"
+        "var NORMAL_TAIL_SECONDS=%0.3f;"
+        "var NORMAL_TAIL_RATE=%0.3f;"
         "var SEEK_STEP=%0.3f;"
         "var SEEK_INTERVAL=%0.3f;"
         "var TIMER_SPEED=%0.3f;"
@@ -447,12 +453,37 @@ static NSString *AdSpeedHTML5Script(void)
         "return !!v && String(v.tagName).toUpperCase()==='VIDEO';"
         "}"
 
+        "function tailStart(v){"
+        "try{"
+        "var d=Number(v.duration);"
+        "if(!isFinite(d)||d<=0)return null;"
+        "var byFraction=d*FAST_UNTIL_FRACTION;"
+        "var bySeconds=Math.max(0,d-NORMAL_TAIL_SECONDS);"
+        "return Math.max(0,Math.min(byFraction,bySeconds));"
+        "}catch(e){return null;}"
+        "}"
+
+        "function desiredRate(v){"
+        "var s=tailStart(v);"
+        "if(s!==null && Number(v.currentTime)>=s)return NORMAL_TAIL_RATE;"
+        "return VIDEO_RATE;"
+        "}"
+
         "function applyVideo(v){"
         "if(!isVideo(v))return;"
-        "try{v.defaultPlaybackRate=VIDEO_RATE;}catch(e){}"
         "try{"
-        "if(Math.abs((v.playbackRate||1)-VIDEO_RATE)>0.001){"
-        "v.playbackRate=VIDEO_RATE;"
+        "var r=desiredRate(v);"
+        "var ts=tailStart(v);"
+        "v.__adspeed_tail_start_seconds=ts;"
+        "v.__adspeed_tail_fast_until_fraction=FAST_UNTIL_FRACTION;"
+        "v.__adspeed_tail_min_seconds=NORMAL_TAIL_SECONDS;"
+        "v.defaultPlaybackRate=r;"
+        "if(Math.abs((v.playbackRate||1)-r)>0.001)v.playbackRate=r;"
+        "if(r===NORMAL_TAIL_RATE){"
+        "if(!v.__adspeed_tail_entered_ms)v.__adspeed_tail_entered_ms=Date.now();"
+        "v.__adspeed_tail_active=true;"
+        "}else{"
+        "v.__adspeed_tail_active=false;"
         "}"
         "}catch(e){}"
         "}"
@@ -477,10 +508,12 @@ static NSString *AdSpeedHTML5Script(void)
         "var v=vs[i];"
         "if(v.paused||v.ended)continue;"
         "if(!isFinite(v.duration)||v.duration<=0)continue;"
-        "var safeEnd=Math.max(0,v.duration-0.35);"
-        "if(v.currentTime>=safeEnd)continue;"
-        "var next=Math.min(v.currentTime+SEEK_STEP,safeEnd);"
+        "var s=tailStart(v);"
+        "if(s===null)continue;"
+        "if(v.currentTime>=s){applyVideo(v);continue;}"
+        "var next=Math.min(v.currentTime+SEEK_STEP,s);"
         "if(next>v.currentTime)v.currentTime=next;"
+        "applyVideo(v);"
         "}"
         "}catch(e){}"
         "},SEEK_INTERVAL);"
@@ -566,7 +599,8 @@ static NSString *AdSpeedHTML5Script(void)
         "var v=e.target;"
         "if(!isVideo(v))return;"
         "try{"
-        "if(Math.abs((v.playbackRate||1)-VIDEO_RATE)>0.001){"
+        "var wanted=desiredRate(v);"
+        "if(Math.abs((v.playbackRate||1)-wanted)>0.001){"
         "var st=window.__adspeed_nativeSetTimeout||window.setTimeout;"
         "st(function(){applyVideo(v);},0);"
         "}"
@@ -594,6 +628,9 @@ static NSString *AdSpeedHTML5Script(void)
         "}"
         "})();",
         kHTML5PlaybackRate,
+        kHTML5FastUntilFraction,
+        kHTML5NormalTailSeconds,
+        kHTML5NormalTailRate,
         kVideoSeekStep,
         kVideoSeekIntervalMs,
         kPlayableTimerSpeed,
@@ -626,6 +663,11 @@ static NSString *AdSpeedDiagnosticScript(void)
     "duration:(isFinite(v.duration)?Number(v.duration):null),"
     "currentTime:(isFinite(v.currentTime)?Number(v.currentTime):null),"
     "playbackRate:(isFinite(v.playbackRate)?Number(v.playbackRate):null),"
+    "ash_tail_active:!!v.__adspeed_tail_active,"
+    "ash_tail_start_seconds:(isFinite(v.__adspeed_tail_start_seconds)?Number(v.__adspeed_tail_start_seconds):null),"
+    "ash_tail_fast_until_fraction:(isFinite(v.__adspeed_tail_fast_until_fraction)?Number(v.__adspeed_tail_fast_until_fraction):null),"
+    "ash_tail_min_seconds:(isFinite(v.__adspeed_tail_min_seconds)?Number(v.__adspeed_tail_min_seconds):null),"
+    "ash_tail_entered_wall_seconds:(v.__adspeed_tail_entered_ms&&ds)?((v.__adspeed_tail_entered_ms-(ds.play_ms===null?ds.observed_ms:ds.play_ms))/1000):null,"
     "paused:!!v.paused,"
     "ended:!!v.ended,"
     "diag_timeupdate_count:ds?Number(ds.timeupdate||0):0,"
