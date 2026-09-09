@@ -12,3 +12,14 @@
 - Existing end-card diagnostics (`endcard_mode`, `endcard_reason`, `endcard_entered_epoch_ms`) remain available.
 - AVPlayer acceleration and ad fingerprint diagnostics are unchanged.
 - No reward callback or server completion is spoofed.
+
+
+## v1.6.0
+- Restores baseline full-speed HTML5 behavior; removes v1.5.x end-card slowdown.
+- Selective 20-second real-elapsed gate only for known problem creative families.
+- Current signatures: Gossip Harbor (`oe8f937c_`) and Meje Kyodan (`o6b5ee74_`). Unknown ads get no added wait.
+- Gate remainder is `max(0, 20s - real_ad_elapsed_seconds)`.
+- Adds real elapsed/gate diagnostics.
+- Extends WKWebView removal grace from 1.5s to 6s to reduce split sessions during transitions.
+- VoidPet is not hard-coded yet because available VoidPet logs predate stable v1.3+ identity data; this avoids slowing unrelated ads.
+- No reward callback/server completion spoofing.
