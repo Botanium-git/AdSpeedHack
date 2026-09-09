@@ -420,7 +420,6 @@ static const float kAVPlayerMultiplier = 600.0f;
 static const double kHTML5PlaybackRate = 16.0;
 static const double kVideoSeekStep = 0.75;
 static const double kVideoSeekIntervalMs = 100.0;
-static const double kVideoSeekEndMargin = 0.35;
 static const double kPlayableTimerSpeed = 8.0;
 static const BOOL kEnablePlayableCanvasPoke = YES;
 static const double kPlayablePokeDelayMs = 1800.0;
