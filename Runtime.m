@@ -3,7 +3,7 @@
 #import <WebKit/WebKit.h>
 #import <objc/runtime.h>
 
-static NSString * const kAddSpeedHackVersion = @"1.2.0";
+static NSString * const kAddSpeedHackVersion = @"1.2.1";
 static NSString * const kAddSpeedHackLogDirectory = @"AddSpeedHackLogs";
 static NSString * const kAddSpeedHackLogPrefix = @"addspeedhack_v1.2";
 
@@ -387,13 +387,29 @@ static NSString *AdSpeedDiagnosticScript(void)
     "var vs=document.querySelectorAll('video');"
     "for(var i=0;i<vs.length;i++){"
     "var v=vs[i];"
+    "try{"
+    "if(!v.__ash_diag){"
+    "v.__ash_diag={timeupdate:0,progress:0,ended:0,q25:false,q50:false,q75:false,q95:false};"
+    "v.addEventListener('timeupdate',function(){try{var s=this.__ash_diag;if(!s)return;s.timeupdate++;var d=Number(this.duration||0),t=Number(this.currentTime||0);if(d>0&&isFinite(d)){var p=t/d;if(p>=0.25)s.q25=true;if(p>=0.50)s.q50=true;if(p>=0.75)s.q75=true;if(p>=0.95)s.q95=true;}}catch(e){}},true);"
+    "v.addEventListener('progress',function(){try{if(this.__ash_diag)this.__ash_diag.progress++;}catch(e){}},true);"
+    "v.addEventListener('ended',function(){try{if(this.__ash_diag)this.__ash_diag.ended++;}catch(e){}},true);"
+    "}"
+    "}catch(e){}"
+    "var ds=null;try{ds=v.__ash_diag||null;}catch(e){}"
     "videos.push({"
     "src:String(v.currentSrc||v.src||''),"
     "duration:(isFinite(v.duration)?Number(v.duration):null),"
     "currentTime:(isFinite(v.currentTime)?Number(v.currentTime):null),"
     "playbackRate:(isFinite(v.playbackRate)?Number(v.playbackRate):null),"
     "paused:!!v.paused,"
-    "ended:!!v.ended"
+    "ended:!!v.ended,"
+    "diag_timeupdate_count:ds?Number(ds.timeupdate||0):0,"
+    "diag_progress_count:ds?Number(ds.progress||0):0,"
+    "diag_ended_count:ds?Number(ds.ended||0):0,"
+    "diag_q25_reached:ds?!!ds.q25:false,"
+    "diag_q50_reached:ds?!!ds.q50:false,"
+    "diag_q75_reached:ds?!!ds.q75:false,"
+    "diag_q95_reached:ds?!!ds.q95:false"
     "});"
     "}"
     "var canvasCount=0;"
@@ -682,7 +698,8 @@ static void AdSpeedInit(void)
             @"reward_inference_enabled": @NO,
             @"rolling_numbered_logs": @YES,
             @"numbered_logs_kept": @10,
-            @"iframe_diagnostics": @"read_only_main_frame_observation"
+            @"iframe_diagnostics": @"read_only_main_frame_observation",
+            @"video_event_diagnostics": @"timeupdate_progress_ended_q25_q50_q75_q95"
         });
 
         Class avPlayerClass = objc_getClass("AVPlayer");
