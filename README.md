@@ -1,6 +1,6 @@
-# AddSpeedHack
+# AdSpeedHack
 
-Current version: **v1.2.5**
+Current version: **v1.2.6**
 
 This starts from the known v2 runtime behavior.
 
@@ -23,22 +23,27 @@ to, for example:
 GitHub Actions will then produce:
 
 ```text
-AddSpeedHack-v1.0.1.dylib
+AdSpeedHack_ver.1.0.1.dylib
 ```
 
 and the artifact itself will be named:
 
 ```text
-AddSpeedHack-v1.0.1
+AdSpeedHack_ver.1.0.1
 ```
 
-The internal Theos library product is `AddSpeedHack.dylib`.
+The internal Theos library product is `AdSpeedHack.dylib`.
 
 Suggested numbering:
 - small fix/logging change: 1.0.1, 1.0.2, ...
 - new feature: 1.1.0, 1.2.0, ...
 - major redesign: 2.0.0
 
+
+## v1.2.6
+
+- Compile-only cleanup: removed obsolete unused logging helpers left behind by the ad-session logger migration.
+- Unified user-facing product/build naming to `AdSpeedHack`; diagnostic log files remain `ASH_ver.x.x.x_log_XX.jsonl`.
 
 ## v1.2.5
 

@@ -3,18 +3,18 @@
 #import <WebKit/WebKit.h>
 #import <objc/runtime.h>
 
-static NSString * const kAddSpeedHackVersion = @"1.2.5";
+static NSString * const kAddSpeedHackVersion = @"1.2.6";
 static NSString * const kAddSpeedHackLogDirectory = @"AdSpeedHackLogs";
-static NSString * const kAddSpeedHackVersionDirectory = @"ver.1.2.5";
-static NSString * const kAddSpeedHackLogStem = @"ASH_ver.1.2.5_log";
-static NSString * const kAddSpeedHackBatchStem = @"ASH_ver.1.2.5_batch";
+static NSString * const kAddSpeedHackVersionDirectory = @"ver.1.2.6";
+static NSString * const kAddSpeedHackLogStem = @"ASH_ver.1.2.6_log";
+static NSString * const kAddSpeedHackBatchStem = @"ASH_ver.1.2.6_batch";
 
 static dispatch_queue_t AddSpeedHackLogQueue(void)
 {
     static dispatch_queue_t queue;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        queue = dispatch_queue_create("com.addspeedhack.log", DISPATCH_QUEUE_SERIAL);
+        queue = dispatch_queue_create("com.adspeedhack.log", DISPATCH_QUEUE_SERIAL);
     });
     return queue;
 }
@@ -210,46 +210,8 @@ static NSString *AddSpeedHackNewLogPath(void)
 }
 
 static NSString *gAddSpeedHackActiveLogPath = nil;
-static NSString *gAddSpeedHackActiveRootURL = nil;
-static BOOL gAddSpeedHackActiveHasRoot = NO;
 
-static BOOL AddSpeedHackIsMeaningfulRootURL(NSString *url)
-{
-    if (url.length == 0) return NO;
-    NSString *lower = url.lowercaseString;
-    if ([lower isEqualToString:@"about:blank"] || [lower hasPrefix:@"about:blank#"]) return NO;
-    return YES;
-}
 
-static NSString *AddSpeedHackEnsureActiveLogPath(BOOL beginNewAd, NSString *rootURL)
-{
-    NSFileManager *fm = [NSFileManager defaultManager];
-    BOOL activeMissing = (gAddSpeedHackActiveLogPath.length > 0 && ![fm fileExistsAtPath:gAddSpeedHackActiveLogPath]);
-    if (activeMissing) {
-        gAddSpeedHackActiveLogPath = nil;
-        gAddSpeedHackActiveRootURL = nil;
-        gAddSpeedHackActiveHasRoot = NO;
-    }
-
-    BOOL meaningfulRoot = AddSpeedHackIsMeaningfulRootURL(rootURL);
-    if (beginNewAd && meaningfulRoot) {
-        if (gAddSpeedHackActiveLogPath.length == 0) {
-            gAddSpeedHackActiveLogPath = AddSpeedHackNewLogPath();
-            gAddSpeedHackActiveRootURL = rootURL;
-            gAddSpeedHackActiveHasRoot = YES;
-        } else if (!gAddSpeedHackActiveHasRoot) {
-            gAddSpeedHackActiveRootURL = rootURL;
-            gAddSpeedHackActiveHasRoot = YES;
-        } else if (![gAddSpeedHackActiveRootURL isEqualToString:rootURL]) {
-            gAddSpeedHackActiveLogPath = AddSpeedHackNewLogPath();
-            gAddSpeedHackActiveRootURL = rootURL;
-            gAddSpeedHackActiveHasRoot = YES;
-        }
-    }
-
-    if (gAddSpeedHackActiveLogPath.length == 0) gAddSpeedHackActiveLogPath = AddSpeedHackNewLogPath();
-    return gAddSpeedHackActiveLogPath;
-}
 static NSString *AddSpeedHackTimestamp(void)
 {
     static NSISO8601DateFormatter *formatter;
@@ -261,59 +223,6 @@ static NSString *AddSpeedHackTimestamp(void)
     return [formatter stringFromDate:[NSDate date]];
 }
 
-static void AddSpeedHackWriteLogInternal(NSDictionary *fields, BOOL beginNewAd, NSString *rootURL)
-{
-    if (![fields isKindOfClass:[NSDictionary class]]) return;
-
-    NSMutableDictionary *record = [NSMutableDictionary dictionaryWithDictionary:fields];
-    record[@"timestamp"] = AddSpeedHackTimestamp();
-    record[@"version"] = kAddSpeedHackVersion;
-
-    NSString *bundleID = NSBundle.mainBundle.bundleIdentifier;
-    if (bundleID.length > 0) record[@"bundle_id"] = bundleID;
-
-    NSString *processName = NSProcessInfo.processInfo.processName;
-    if (processName.length > 0) record[@"process"] = processName;
-
-    dispatch_async(AddSpeedHackLogQueue(), ^{
-        @autoreleasepool {
-            NSError *jsonError = nil;
-            NSData *json = [NSJSONSerialization dataWithJSONObject:record options:0 error:&jsonError];
-            if (!json || jsonError) return;
-
-            NSString *path = AddSpeedHackEnsureActiveLogPath(beginNewAd, rootURL);
-            if (path.length == 0) return;
-
-            NSString *directory = [path stringByDeletingLastPathComponent];
-            NSError *directoryError = nil;
-            [[NSFileManager defaultManager] createDirectoryAtPath:directory
-                                      withIntermediateDirectories:YES
-                                                       attributes:nil
-                                                            error:&directoryError];
-            if (directoryError) return;
-
-            NSMutableData *line = [NSMutableData dataWithData:json];
-            const char newline = '\n';
-            [line appendBytes:&newline length:1];
-
-            if (![[NSFileManager defaultManager] fileExistsAtPath:path]) {
-                [line writeToFile:path atomically:YES];
-                return;
-            }
-
-            NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
-            if (!handle) return;
-
-            @try {
-                [handle seekToEndOfFile];
-                [handle writeData:line];
-                [handle closeFile];
-            } @catch (__unused NSException *exception) {
-                @try { [handle closeFile]; } @catch (__unused NSException *closeException) {}
-            }
-        }
-    });
-}
 
 
 static void AddSpeedHackWriteLogToPath(NSDictionary *fields, NSString *path)
