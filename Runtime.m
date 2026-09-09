@@ -3,11 +3,11 @@
 #import <WebKit/WebKit.h>
 #import <objc/runtime.h>
 
-static NSString * const kAddSpeedHackVersion = @"1.2.6";
+static NSString * const kAddSpeedHackVersion = @"1.3.0";
 static NSString * const kAddSpeedHackLogDirectory = @"AdSpeedHackLogs";
-static NSString * const kAddSpeedHackVersionDirectory = @"ver.1.2.6";
-static NSString * const kAddSpeedHackLogStem = @"ASH_ver.1.2.6_log";
-static NSString * const kAddSpeedHackBatchStem = @"ASH_ver.1.2.6_batch";
+static NSString * const kAddSpeedHackVersionDirectory = @"ver.1.3.0";
+static NSString * const kAddSpeedHackLogStem = @"ASH_ver.1.3.0_log";
+static NSString * const kAddSpeedHackBatchStem = @"ASH_ver.1.3.0_batch";
 
 static dispatch_queue_t AddSpeedHackLogQueue(void)
 {
@@ -221,6 +221,155 @@ static NSString *AddSpeedHackTimestamp(void)
         formatter.formatOptions = NSISO8601DateFormatWithInternetDateTime | NSISO8601DateFormatWithFractionalSeconds;
     });
     return [formatter stringFromDate:[NSDate date]];
+}
+
+
+static NSString *AddSpeedHackNormalizedIdentityURL(NSString *value)
+{
+    if (value.length == 0) return @"";
+    NSURLComponents *components = [NSURLComponents componentsWithString:value];
+    if (!components) return value.length > 512 ? [value substringToIndex:512] : value;
+
+    components.query = nil;
+    components.fragment = nil;
+    NSString *scheme = components.scheme.lowercaseString ?: @"";
+    NSString *host = components.host.lowercaseString ?: @"";
+    NSString *path = components.percentEncodedPath ?: @"";
+
+    if ([scheme isEqualToString:@"file"]) {
+        NSString *last = path.lastPathComponent ?: @"";
+        return last.length ? [@"file://" stringByAppendingString:last] : @"file://";
+    }
+    if (host.length) {
+        NSString *base = [NSString stringWithFormat:@"%@://%@%@", scheme.length ? scheme : @"https", host, path];
+        return base.length > 512 ? [base substringToIndex:512] : base;
+    }
+    NSString *fallback = components.string ?: value;
+    return fallback.length > 512 ? [fallback substringToIndex:512] : fallback;
+}
+
+static NSString *AddSpeedHackAdNetworkCandidate(NSArray<NSString *> *urls)
+{
+    NSString *joined = [[urls componentsJoinedByString:@" "] lowercaseString];
+    if ([joined containsString:@"moloco"]) return @"moloco";
+    if ([joined containsString:@"doubleclick"] || [joined containsString:@"googleads"] || [joined containsString:@"googlesyndication"] || [joined containsString:@"admob"]) return @"google";
+    if ([joined containsString:@"applovin"]) return @"applovin";
+    if ([joined containsString:@"unityads"] || [joined containsString:@"unity3d"]) return @"unity";
+    if ([joined containsString:@"ironsource"] || [joined containsString:@"supersonicads"]) return @"ironsource";
+    if ([joined containsString:@"mintegral"] || [joined containsString:@"mtgcdn"]) return @"mintegral";
+    if ([joined containsString:@"vungle"] || [joined containsString:@"liftoff"]) return @"vungle_liftoff";
+    if ([joined containsString:@"pangle"] || [joined containsString:@"pangleglobal"] || [joined containsString:@"bytedance"]) return @"pangle";
+    if ([joined containsString:@"inmobi"]) return @"inmobi";
+    if ([joined containsString:@"fyber"] || [joined containsString:@"inner-active"] || [joined containsString:@"digitalturbine"]) return @"fyber_digital_turbine";
+    if ([joined containsString:@"chartboost"]) return @"chartboost";
+    if ([joined containsString:@"facebook"] || [joined containsString:@"audiencenetwork"]) return @"meta_audience_network";
+    return @"unknown";
+}
+
+static NSArray<NSString *> *AddSpeedHackCreativeIDCandidates(NSArray<NSString *> *urls)
+{
+    NSMutableOrderedSet<NSString *> *values = [NSMutableOrderedSet orderedSet];
+    NSArray<NSString *> *keys = @[@"creative", @"creative_id", @"creativeid", @"crid", @"ad_id", @"adid", @"campaign_id", @"campaignid", @"asset_id", @"assetid"];
+
+    for (NSString *raw in urls) {
+        if (![raw isKindOfClass:[NSString class]] || raw.length == 0) continue;
+        NSURLComponents *components = [NSURLComponents componentsWithString:raw];
+        for (NSURLQueryItem *item in components.queryItems ?: @[]) {
+            NSString *name = item.name.lowercaseString;
+            if (![keys containsObject:name]) continue;
+            NSString *value = item.value ?: @"";
+            if (value.length >= 3 && value.length <= 160) [values addObject:value];
+        }
+
+        NSError *error = nil;
+        NSRegularExpression *uuidRX = [NSRegularExpression regularExpressionWithPattern:@"(?i)(?:^|[^0-9a-f])([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})(?:$|[^0-9a-f])" options:0 error:&error];
+        if (!error) {
+            NSArray<NSTextCheckingResult *> *matches = [uuidRX matchesInString:raw options:0 range:NSMakeRange(0, raw.length)];
+            for (NSTextCheckingResult *match in matches) {
+                if (match.numberOfRanges < 2) continue;
+                NSString *value = [raw substringWithRange:[match rangeAtIndex:1]];
+                if (value.length) [values addObject:value];
+                if (values.count >= 8) break;
+            }
+        }
+        if (values.count >= 8) break;
+    }
+
+    NSArray<NSString *> *array = values.array;
+    return array.count > 8 ? [array subarrayWithRange:NSMakeRange(0, 8)] : array;
+}
+
+static NSString *AddSpeedHackFNV1a64(NSString *value)
+{
+    NSData *data = [value dataUsingEncoding:NSUTF8StringEncoding] ?: [NSData data];
+    const unsigned char *bytes = data.bytes;
+    uint64_t hash = UINT64_C(14695981039346656037);
+    for (NSUInteger i = 0; i < data.length; i++) {
+        hash ^= (uint64_t)bytes[i];
+        hash *= UINT64_C(1099511628211);
+    }
+    return [NSString stringWithFormat:@"%016llx", (unsigned long long)hash];
+}
+
+static NSDictionary *AddSpeedHackIdentityFromSnapshot(NSDictionary *snapshot, NSString *nativeURL)
+{
+    NSMutableArray<NSString *> *rawURLs = [NSMutableArray array];
+    NSString *pageURL = [snapshot[@"page_url"] isKindOfClass:[NSString class]] ? snapshot[@"page_url"] : @"";
+    if (pageURL.length) [rawURLs addObject:pageURL];
+    if (nativeURL.length) [rawURLs addObject:nativeURL];
+
+    NSMutableArray<NSString *> *videoParts = [NSMutableArray array];
+    NSArray *videos = [snapshot[@"videos"] isKindOfClass:[NSArray class]] ? snapshot[@"videos"] : @[];
+    for (NSDictionary *video in videos) {
+        if (![video isKindOfClass:[NSDictionary class]]) continue;
+        NSString *src = [video[@"src"] isKindOfClass:[NSString class]] ? video[@"src"] : @"";
+        if (src.length) [rawURLs addObject:src];
+        NSString *normalized = AddSpeedHackNormalizedIdentityURL(src);
+        NSNumber *duration = [video[@"duration"] isKindOfClass:[NSNumber class]] ? video[@"duration"] : nil;
+        NSInteger roundedDuration = duration ? (NSInteger)llround(duration.doubleValue) : -1;
+        [videoParts addObject:[NSString stringWithFormat:@"%@|%ld", normalized, (long)roundedDuration]];
+    }
+
+    NSMutableArray<NSString *> *iframeParts = [NSMutableArray array];
+    NSArray *iframes = [snapshot[@"iframes"] isKindOfClass:[NSArray class]] ? snapshot[@"iframes"] : @[];
+    for (NSDictionary *iframe in iframes) {
+        if (![iframe isKindOfClass:[NSDictionary class]]) continue;
+        NSString *src = [iframe[@"src"] isKindOfClass:[NSString class]] ? iframe[@"src"] : @"";
+        NSString *child = [iframe[@"child_url"] isKindOfClass:[NSString class]] ? iframe[@"child_url"] : @"";
+        if (src.length) [rawURLs addObject:src];
+        if (child.length) [rawURLs addObject:child];
+        NSString *part = AddSpeedHackNormalizedIdentityURL(src.length ? src : child);
+        if (part.length) [iframeParts addObject:part];
+    }
+
+    NSString *network = AddSpeedHackAdNetworkCandidate(rawURLs);
+    NSArray<NSString *> *creativeIDs = AddSpeedHackCreativeIDCandidates(rawURLs);
+    NSString *normalizedPage = AddSpeedHackNormalizedIdentityURL(pageURL.length ? pageURL : nativeURL);
+
+    [videoParts sortUsingSelector:@selector(compare:)];
+    [iframeParts sortUsingSelector:@selector(compare:)];
+    NSString *identityMaterial = [NSString stringWithFormat:@"network=%@;page=%@;videos=%@;iframes=%@;creative=%@",
+                                  network,
+                                  normalizedPage,
+                                  [videoParts componentsJoinedByString:@","],
+                                  [iframeParts componentsJoinedByString:@","],
+                                  [creativeIDs componentsJoinedByString:@","]];
+    NSString *fingerprint = AddSpeedHackFNV1a64(identityMaterial);
+
+    NSString *quality = @"low";
+    if (videoParts.count > 0 && ![network isEqualToString:@"unknown"]) quality = @"high";
+    else if (videoParts.count > 0 || iframeParts.count > 0 || creativeIDs.count > 0) quality = @"medium";
+
+    return @{
+        @"ad_fingerprint": fingerprint,
+        @"optimization_profile_key": [@"ad_" stringByAppendingString:fingerprint],
+        @"ad_network_candidate": network,
+        @"fingerprint_quality": quality,
+        @"creative_id_candidates": creativeIDs,
+        @"fingerprint_page": normalizedPage,
+        @"fingerprint_video_parts": videoParts,
+        @"fingerprint_iframe_parts": iframeParts
+    };
 }
 
 
@@ -550,6 +699,7 @@ static const void *kAddSpeedHackWKLogPathKey = &kAddSpeedHackWKLogPathKey;
 static const void *kAddSpeedHackWKWeakEvidenceKey = &kAddSpeedHackWKWeakEvidenceKey;
 static const void *kAddSpeedHackWKParticipantKey = &kAddSpeedHackWKParticipantKey;
 static const void *kAddSpeedHackAVLoggedKey = &kAddSpeedHackAVLoggedKey;
+static const void *kAddSpeedHackWKLastFingerprintKey = &kAddSpeedHackWKLastFingerprintKey;
 
 // v1.2.5: one parent ad session owns one log file. Individual WKWebViews join it.
 static NSString *gAddSpeedHackAdSessionID = nil;
@@ -573,6 +723,7 @@ static void AddSpeedHackResetAdSessionState(void)
         objc_setAssociatedObject(webView, kAddSpeedHackWKLogStartedKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         objc_setAssociatedObject(webView, kAddSpeedHackWKWeakEvidenceKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         objc_setAssociatedObject(webView, kAddSpeedHackWKParticipantKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(webView, kAddSpeedHackWKLastFingerprintKey, nil, OBJC_ASSOCIATION_COPY_NONATOMIC);
     }
     if ([gAddSpeedHackActiveLogPath isEqualToString:oldPath]) gAddSpeedHackActiveLogPath = nil;
     gAddSpeedHackAdSessionID = nil;
@@ -699,6 +850,9 @@ static void AddSpeedHackProbeWKWebView(WKWebView *webView, NSTimeInterval delay,
             NSDictionary *snapshot = (NSDictionary *)result;
             [record addEntriesFromDictionary:snapshot];
 
+            NSDictionary *identity = AddSpeedHackIdentityFromSnapshot(snapshot, nativeURL ?: @"");
+            [record addEntriesFromDictionary:identity];
+
             NSInteger videoCount = [snapshot[@"video_count"] integerValue];
             NSInteger canvasCount = [snapshot[@"canvas_count"] integerValue];
             NSInteger iframeCount = [snapshot[@"iframe_count"] integerValue];
@@ -741,6 +895,24 @@ static void AddSpeedHackProbeWKWebView(WKWebView *webView, NSTimeInterval delay,
             record[@"ad_session_id"] = gAddSpeedHackAdSessionID ?: @"";
             record[@"ad_session_confidence"] = gAddSpeedHackAdSessionConfidence ?: @"low";
             record[@"ad_evidence_strength"] = strongEvidence ? @"strong" : (weakEvidence ? @"weak" : @"none");
+
+            NSString *fingerprint = [record[@"ad_fingerprint"] isKindOfClass:[NSString class]] ? record[@"ad_fingerprint"] : @"";
+            NSString *previousFingerprint = objc_getAssociatedObject(webView, kAddSpeedHackWKLastFingerprintKey);
+            if (fingerprint.length && ![fingerprint isEqualToString:previousFingerprint]) {
+                objc_setAssociatedObject(webView, kAddSpeedHackWKLastFingerprintKey, fingerprint, OBJC_ASSOCIATION_COPY_NONATOMIC);
+                AddSpeedHackWriteLogToPath(@{
+                    @"event": @"ad_identity_observed",
+                    @"ad_session_id": gAddSpeedHackAdSessionID ?: @"",
+                    @"ad_fingerprint": fingerprint,
+                    @"optimization_profile_key": record[@"optimization_profile_key"] ?: @"",
+                    @"ad_network_candidate": record[@"ad_network_candidate"] ?: @"unknown",
+                    @"fingerprint_quality": record[@"fingerprint_quality"] ?: @"low",
+                    @"creative_id_candidates": record[@"creative_id_candidates"] ?: @[],
+                    @"fingerprint_page": record[@"fingerprint_page"] ?: @"",
+                    @"fingerprint_video_parts": record[@"fingerprint_video_parts"] ?: @[],
+                    @"fingerprint_iframe_parts": record[@"fingerprint_iframe_parts"] ?: @[]
+                }, logPath);
+            }
             AddSpeedHackWriteLogToPath(record, logPath);
         }
 
