@@ -3,9 +3,9 @@
 #import <WebKit/WebKit.h>
 #import <objc/runtime.h>
 
-static NSString * const kAddSpeedHackVersion = @"1.1.0";
+static NSString * const kAddSpeedHackVersion = @"1.2.0";
 static NSString * const kAddSpeedHackLogDirectory = @"AddSpeedHackLogs";
-static NSString * const kAddSpeedHackLogFile = @"addspeedhack_v1.1.jsonl";
+static NSString * const kAddSpeedHackLogPrefix = @"addspeedhack_v1.2";
 
 static dispatch_queue_t AddSpeedHackLogQueue(void)
 {
@@ -17,16 +17,106 @@ static dispatch_queue_t AddSpeedHackLogQueue(void)
     return queue;
 }
 
-static NSString *AddSpeedHackLogPath(void)
+static NSString *AddSpeedHackLogDirectoryPath(void)
 {
     NSArray<NSString *> *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
     NSString *documents = paths.firstObject;
     if (documents.length == 0) return nil;
-
-    NSString *directory = [documents stringByAppendingPathComponent:kAddSpeedHackLogDirectory];
-    return [directory stringByAppendingPathComponent:kAddSpeedHackLogFile];
+    return [documents stringByAppendingPathComponent:kAddSpeedHackLogDirectory];
 }
 
+static NSString *AddSpeedHackCounterPath(void)
+{
+    NSString *directory = AddSpeedHackLogDirectoryPath();
+    return directory.length ? [directory stringByAppendingPathComponent:@".addspeedhack_v1.2_counter"] : nil;
+}
+
+static NSUInteger AddSpeedHackNextLogNumber(void)
+{
+    NSString *counterPath = AddSpeedHackCounterPath();
+    NSUInteger last = 0;
+    if (counterPath.length) {
+        NSString *s = [NSString stringWithContentsOfFile:counterPath encoding:NSUTF8StringEncoding error:nil];
+        last = (NSUInteger)MAX(0, s.integerValue);
+    }
+    NSUInteger next = last + 1;
+    [[NSString stringWithFormat:@"%lu", (unsigned long)next]
+        writeToFile:counterPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    return next;
+}
+
+static NSString *AddSpeedHackNewLogPath(void)
+{
+    NSString *directory = AddSpeedHackLogDirectoryPath();
+    if (directory.length == 0) return nil;
+
+    [[NSFileManager defaultManager] createDirectoryAtPath:directory
+                              withIntermediateDirectories:YES
+                                               attributes:nil
+                                                    error:nil];
+
+    NSUInteger number = AddSpeedHackNextLogNumber();
+    NSString *name = [NSString stringWithFormat:@"%@-%lu.jsonl",
+                      kAddSpeedHackLogPrefix, (unsigned long)number];
+    return [directory stringByAppendingPathComponent:name];
+}
+
+static NSString *gAddSpeedHackActiveLogPath = nil;
+static NSTimeInterval gAddSpeedHackLastActivity = 0;
+static const NSTimeInterval kAddSpeedHackAdGapSeconds = 4.0;
+
+static void AddSpeedHackPruneNumberedLogs(void)
+{
+    NSString *directory = AddSpeedHackLogDirectoryPath();
+    NSArray<NSString *> *files = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:directory error:nil];
+    if (!files) return;
+
+    NSRegularExpression *rx =
+        [NSRegularExpression regularExpressionWithPattern:@"^addspeedhack_v1\\.2-(\\d+)\\.jsonl$"
+                                                  options:0 error:nil];
+    NSMutableArray<NSDictionary *> *numbered = [NSMutableArray array];
+
+    for (NSString *name in files) {
+        NSTextCheckingResult *m = [rx firstMatchInString:name options:0 range:NSMakeRange(0, name.length)];
+        if (!m || m.numberOfRanges < 2) continue;
+        NSString *n = [name substringWithRange:[m rangeAtIndex:1]];
+        [numbered addObject:@{@"name": name, @"number": @([n integerValue])}];
+    }
+
+    [numbered sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        return [a[@"number"] compare:b[@"number"]];
+    }];
+
+    while (numbered.count > 10) {
+        NSString *name = numbered.firstObject[@"name"];
+        [[NSFileManager defaultManager] removeItemAtPath:[directory stringByAppendingPathComponent:name] error:nil];
+        [numbered removeObjectAtIndex:0];
+    }
+}
+
+static NSString *AddSpeedHackEnsureActiveLogPath(BOOL beginNewAd)
+{
+    NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+    BOOL activeMissing = (gAddSpeedHackActiveLogPath.length > 0 &&
+                          ![[NSFileManager defaultManager] fileExistsAtPath:gAddSpeedHackActiveLogPath]);
+
+    if (activeMissing) gAddSpeedHackActiveLogPath = nil;
+
+    if (beginNewAd &&
+        gAddSpeedHackActiveLogPath.length > 0 &&
+        gAddSpeedHackLastActivity > 0 &&
+        (now - gAddSpeedHackLastActivity) >= kAddSpeedHackAdGapSeconds) {
+        gAddSpeedHackActiveLogPath = nil;
+    }
+
+    if (gAddSpeedHackActiveLogPath.length == 0) {
+        gAddSpeedHackActiveLogPath = AddSpeedHackNewLogPath();
+        AddSpeedHackPruneNumberedLogs();
+    }
+
+    gAddSpeedHackLastActivity = now;
+    return gAddSpeedHackActiveLogPath;
+}
 static NSString *AddSpeedHackTimestamp(void)
 {
     static NSISO8601DateFormatter *formatter;
@@ -38,7 +128,7 @@ static NSString *AddSpeedHackTimestamp(void)
     return [formatter stringFromDate:[NSDate date]];
 }
 
-static void AddSpeedHackWriteLog(NSDictionary *fields)
+static void AddSpeedHackWriteLogInternal(NSDictionary *fields, BOOL beginNewAd)
 {
     if (![fields isKindOfClass:[NSDictionary class]]) return;
 
@@ -58,7 +148,7 @@ static void AddSpeedHackWriteLog(NSDictionary *fields)
             NSData *json = [NSJSONSerialization dataWithJSONObject:record options:0 error:&jsonError];
             if (!json || jsonError) return;
 
-            NSString *path = AddSpeedHackLogPath();
+            NSString *path = AddSpeedHackEnsureActiveLogPath(beginNewAd);
             if (path.length == 0) return;
 
             NSString *directory = [path stringByDeletingLastPathComponent];
@@ -90,6 +180,17 @@ static void AddSpeedHackWriteLog(NSDictionary *fields)
             }
         }
     });
+}
+
+
+static void AddSpeedHackWriteLog(NSDictionary *fields)
+{
+    AddSpeedHackWriteLogInternal(fields, NO);
+}
+
+static void AddSpeedHackBeginAdLog(NSDictionary *fields)
+{
+    AddSpeedHackWriteLogInternal(fields, YES);
 }
 
 static const float kAVPlayerMultiplier = 600.0f;
@@ -298,12 +399,42 @@ static NSString *AdSpeedDiagnosticScript(void)
     "var canvasCount=0;"
     "try{canvasCount=document.querySelectorAll('canvas').length;}catch(e){}"
     "var iframeCount=0;"
-    "try{iframeCount=document.querySelectorAll('iframe').length;}catch(e){}"
+    "var iframes=[];"
+    "try{"
+    "var fs=document.querySelectorAll('iframe');"
+    "iframeCount=fs.length;"
+    "for(var j=0;j<fs.length;j++){"
+    "var f=fs[j],r=null;"
+    "try{r=f.getBoundingClientRect();}catch(e){}"
+    "var sameOrigin=false,childVideoCount=null,childCanvasCount=null,childIframeCount=null,childURL='';"
+    "try{"
+    "var d=f.contentDocument;"
+    "if(d){"
+    "sameOrigin=true;"
+    "childVideoCount=d.querySelectorAll('video').length;"
+    "childCanvasCount=d.querySelectorAll('canvas').length;"
+    "childIframeCount=d.querySelectorAll('iframe').length;"
+    "try{childURL=String(f.contentWindow.location.href||'');}catch(e){}"
+    "}"
+    "}catch(e){}"
+    "iframes.push({"
+    "src:String(f.src||''),"
+    "same_origin:sameOrigin,"
+    "child_url:childURL,"
+    "child_video_count:childVideoCount,"
+    "child_canvas_count:childCanvasCount,"
+    "child_iframe_count:childIframeCount,"
+    "width:r?Number(r.width):null,"
+    "height:r?Number(r.height):null"
+    "});"
+    "}"
+    "}catch(e){}"
     "return {"
     "page_url:String(location.href||''),"
     "video_count:vs.length,"
     "canvas_count:canvasCount,"
     "iframe_count:iframeCount,"
+    "iframes:iframes,"
     "videos:videos,"
     "runtime_installed:!!window.__adspeed_runtime_v2,"
     "timer_acceleration_installed:!!window.__adspeed_timers_installed,"
@@ -410,7 +541,7 @@ static void ScheduleWKWebViewInjection(WKWebView *webView)
                              @NO,
                              OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-    AddSpeedHackWriteLog(@{
+    AddSpeedHackBeginAdLog(@{
         @"event": @"wk_navigation_scheduled",
         @"session_id": sessionID,
         @"native_page_url": webView.URL.absoluteString ?: @""
@@ -547,8 +678,11 @@ static void AdSpeedInit(void)
     @autoreleasepool {
         AddSpeedHackWriteLog(@{
             @"event": @"runtime_loaded",
-            @"log_file": @"Documents/AddSpeedHackLogs/addspeedhack_v1.1.jsonl",
-            @"reward_inference_enabled": @NO
+            @"log_file": @"Documents/AddSpeedHackLogs/addspeedhack_v1.2-N.jsonl",
+            @"reward_inference_enabled": @NO,
+            @"rolling_numbered_logs": @YES,
+            @"numbered_logs_kept": @10,
+            @"iframe_diagnostics": @"read_only_main_frame_observation"
         });
 
         Class avPlayerClass = objc_getClass("AVPlayer");
