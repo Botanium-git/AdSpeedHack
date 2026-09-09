@@ -3,11 +3,11 @@
 #import <WebKit/WebKit.h>
 #import <objc/runtime.h>
 
-static NSString * const kAddSpeedHackVersion = @"1.5.0";
+static NSString * const kAddSpeedHackVersion = @"1.5.1";
 static NSString * const kAddSpeedHackLogDirectory = @"AdSpeedHackLogs";
-static NSString * const kAddSpeedHackVersionDirectory = @"ver.1.5.0";
-static NSString * const kAddSpeedHackLogStem = @"ASH_ver.1.5.0_log";
-static NSString * const kAddSpeedHackBatchStem = @"ASH_ver.1.5.0_batch";
+static NSString * const kAddSpeedHackVersionDirectory = @"ver.1.5.1";
+static NSString * const kAddSpeedHackLogStem = @"ASH_ver.1.5.1_log";
+static NSString * const kAddSpeedHackBatchStem = @"ASH_ver.1.5.1_batch";
 
 static dispatch_queue_t AddSpeedHackLogQueue(void)
 {
@@ -485,15 +485,22 @@ static NSString *AdSpeedHTML5Script(void)
         "try{"
         "var vs=document.querySelectorAll('video');"
         "for(var i=0;i<vs.length;i++){"
-        "var v=vs[i];if(v.paused||v.ended)continue;if(!isFinite(v.duration)||v.duration<=0)continue;"
-        "var limit=Math.max(0,v.duration-SEEK_END_MARGIN);"
-        "if(v.currentTime<limit){var next=Math.min(v.currentTime+SEEK_STEP,limit);if(next>v.currentTime)v.currentTime=next;}"
+        "var v=vs[i];if(!isFinite(v.duration)||v.duration<=0)continue;"
+        "var ct=Number(v.currentTime||0),dur=Number(v.duration||0);"
+        "var nearEnd=Math.max(0,dur-SEEK_END_MARGIN-0.25);"
+        "if(ct>=nearEnd)v.__adspeed_seen_near_end=true;"
+        "if(v.__adspeed_seen_near_end&&ct<=1.0&&!v.ended){enterEndcard('video_reset_after_near_end');continue;}"
+        "if(window.__adspeed_endcard_mode)continue;"
+        "if(v.paused||v.ended)continue;"
+        "var limit=Math.max(0,dur-SEEK_END_MARGIN);"
+        "if(ct<limit){var next=Math.min(ct+SEEK_STEP,limit);if(next>ct)v.currentTime=next;}"
         "applyVideo(v);"
         "}"
         "}catch(e){}"
         "},SEEK_INTERVAL);"
         "}"
 
+        "function invokeTimerCallback(fn,args){if(typeof fn==='function')return fn.apply(window,args);try{return(0,eval)(String(fn));}catch(e){}}"
         "function installTimerAcceleration(){"
         "if(window.__adspeed_timers_installed)return;"
         "window.__adspeed_timers_installed=true;"
@@ -501,8 +508,8 @@ static NSString *AdSpeedHTML5Script(void)
         "var nativeSetInterval=window.setInterval.bind(window);"
         "window.__adspeed_nativeSetTimeout=nativeSetTimeout;"
         "window.__adspeed_nativeSetInterval=nativeSetInterval;"
-        "window.setTimeout=function(fn,delay){var args=Array.prototype.slice.call(arguments,2);var d=Number(delay);if(!isFinite(d))d=0;if(d>20)d=Math.max(4,d/TIMER_SPEED);return nativeSetTimeout(function(){if(typeof fn==='function')return fn.apply(window,args);try{return(0,eval)(String(fn));}catch(e){}},d);};"
-        "window.setInterval=function(fn,delay){var args=Array.prototype.slice.call(arguments,2);var d=Number(delay);if(!isFinite(d))d=0;if(d>20)d=Math.max(8,d/TIMER_SPEED);return nativeSetInterval(function(){if(typeof fn==='function')return fn.apply(window,args);try{return(0,eval)(String(fn));}catch(e){}},d);};"
+        "window.setTimeout=function(fn,delay){var args=Array.prototype.slice.call(arguments,2);var original=Number(delay);if(!isFinite(original))original=0;var start=Date.now();var fast=original;if(fast>20)fast=Math.max(4,fast/TIMER_SPEED);return nativeSetTimeout(function fire(){if(window.__adspeed_endcard_mode&&original>20){var remain=original-(Date.now()-start);if(remain>1){return nativeSetTimeout(fire,remain);}}return invokeTimerCallback(fn,args);},fast);};"
+        "window.setInterval=function(fn,delay){var args=Array.prototype.slice.call(arguments,2);var original=Number(delay);if(!isFinite(original))original=0;var fast=original;if(fast>20)fast=Math.max(8,fast/TIMER_SPEED);var lastReal=Date.now();return nativeSetInterval(function(){var now=Date.now();if(window.__adspeed_endcard_mode&&original>20){if(now-lastReal+1<original)return;lastReal=now;}else{lastReal=now;}return invokeTimerCallback(fn,args);},fast);};"
         "}"
 
         "function findPlayableCanvas(){try{var cs=document.querySelectorAll('canvas'),best=null,bestArea=0;for(var i=0;i<cs.length;i++){var c=cs[i],r=c.getBoundingClientRect(),area=Math.max(0,r.width)*Math.max(0,r.height);if(area>bestArea&&r.width>=120&&r.height>=120){best=c;bestArea=area;}}return best;}catch(e){return null;}}"

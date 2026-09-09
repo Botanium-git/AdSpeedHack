@@ -1,24 +1,14 @@
-# AdSpeedHack v1.5.0
+# AdSpeedHack v1.5.1
 
-## Changes
+## Changes from v1.5.0
 
-- Keeps the v1.3.0 ad fingerprint / identity logging foundation.
-- HTML5 rewarded-video acceleration now uses a protected normal-speed tail.
-- Fast phase: 16x playback + existing seek boost.
-- Tail rule: acceleration stops at the earlier of 95% progress or 5 seconds remaining.
-- Tail phase: 1.0x playback, no seek boost.
-- Added tail-state diagnostics to logs (`ash_tail_active`, `ash_tail_entered_wall_seconds`).
-- AVPlayer acceleration remains unchanged at 600x for this experiment.
-- Playable timer acceleration remains unchanged at 8x.
-
-This version intentionally changes only the HTML5 video tail behavior so reward compatibility can be tested without mixing multiple behavioral changes.
-
-
-## v1.5.0 end-card experiment
-- Removed the global 95% / 5-second normal-speed video tail from v1.4.0.
-- Restored baseline HTML5 video acceleration: 16x playback, +0.75 s / 100 ms seeking, stopping 0.35 s before the media end.
-- After an observed video end (or video disappearance after a video was seen), marks the page as end-card mode.
-- In end-card mode, future JavaScript timers use native timing instead of the 8x playable timer acceleration.
-- Playable canvas poke is not performed after end-card mode begins.
-- Adds endcard_mode, endcard_reason, and endcard_entered_epoch_ms diagnostics.
-- Reward success is never inferred or spoofed.
+- Keeps baseline video acceleration restored in v1.5.0: 16x HTML5 playback plus the existing seek boost.
+- Adds a Gossip-Harbor-style end-card transition candidate: when a video has reached the near-end region and then the same video resets to about 0 seconds without a normal `ended` event, ASH enters end-card mode with reason `video_reset_after_near_end`.
+- In end-card mode, the seek boost no longer advances video elements.
+- Timer acceleration is now end-card-aware even for timers that were created before end-card detection:
+  - accelerated `setTimeout` callbacks wait out the remaining original real-time delay after end-card mode begins;
+  - accelerated `setInterval` callbacks are gated to their original real-time cadence after end-card mode begins.
+- Existing `video_ended` and `video_disappeared` end-card triggers remain in place.
+- Existing end-card diagnostics (`endcard_mode`, `endcard_reason`, `endcard_entered_epoch_ms`) remain available.
+- AVPlayer acceleration and ad fingerprint diagnostics are unchanged.
+- No reward callback or server completion is spoofed.
