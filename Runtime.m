@@ -3,11 +3,11 @@
 #import <WebKit/WebKit.h>
 #import <objc/runtime.h>
 
-static NSString * const kAddSpeedHackVersion = @"1.2.3";
+static NSString * const kAddSpeedHackVersion = @"1.2.4";
 static NSString * const kAddSpeedHackLogDirectory = @"AdSpeedHackLogs";
-static NSString * const kAddSpeedHackVersionDirectory = @"ver.1.2.3";
-static NSString * const kAddSpeedHackLogStem = @"ASH_ver.1.2.3_log";
-static NSString * const kAddSpeedHackBatchStem = @"ASH_ver.1.2.3_batch";
+static NSString * const kAddSpeedHackVersionDirectory = @"ver.1.2.4";
+static NSString * const kAddSpeedHackLogStem = @"ASH_ver.1.2.4_log";
+static NSString * const kAddSpeedHackBatchStem = @"ASH_ver.1.2.4_batch";
 
 static dispatch_queue_t AddSpeedHackLogQueue(void)
 {
@@ -361,11 +361,6 @@ static void AddSpeedHackWriteLogToPath(NSDictionary *fields, NSString *path)
 static void AddSpeedHackWriteLog(NSDictionary *fields)
 {
     AddSpeedHackWriteLogInternal(fields, NO, nil);
-}
-
-static void AddSpeedHackBeginAdLog(NSDictionary *fields, NSString *rootURL)
-{
-    AddSpeedHackWriteLogInternal(fields, YES, rootURL);
 }
 
 static const float kAVPlayerMultiplier = 600.0f;
