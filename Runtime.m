@@ -3,11 +3,11 @@
 #import <WebKit/WebKit.h>
 #import <objc/runtime.h>
 
-static NSString * const kAddSpeedHackVersion = @"1.4.0";
+static NSString * const kAddSpeedHackVersion = @"1.5.0";
 static NSString * const kAddSpeedHackLogDirectory = @"AdSpeedHackLogs";
-static NSString * const kAddSpeedHackVersionDirectory = @"ver.1.4.0";
-static NSString * const kAddSpeedHackLogStem = @"ASH_ver.1.4.0_log";
-static NSString * const kAddSpeedHackBatchStem = @"ASH_ver.1.4.0_batch";
+static NSString * const kAddSpeedHackVersionDirectory = @"ver.1.5.0";
+static NSString * const kAddSpeedHackLogStem = @"ASH_ver.1.5.0_log";
+static NSString * const kAddSpeedHackBatchStem = @"ASH_ver.1.5.0_batch";
 
 static dispatch_queue_t AddSpeedHackLogQueue(void)
 {
@@ -418,11 +418,9 @@ static void AddSpeedHackWriteLogToPath(NSDictionary *fields, NSString *path)
 
 static const float kAVPlayerMultiplier = 600.0f;
 static const double kHTML5PlaybackRate = 16.0;
-static const double kHTML5FastUntilFraction = 0.95;
-static const double kHTML5NormalTailSeconds = 5.0;
-static const double kHTML5NormalTailRate = 1.0;
 static const double kVideoSeekStep = 0.75;
 static const double kVideoSeekIntervalMs = 100.0;
+static const double kVideoSeekEndMargin = 0.35;
 static const double kPlayableTimerSpeed = 8.0;
 static const BOOL kEnablePlayableCanvasPoke = YES;
 static const double kPlayablePokeDelayMs = 1800.0;
@@ -439,80 +437,57 @@ static NSString *AdSpeedHTML5Script(void)
         @"(function(){"
         "try{"
         "var VIDEO_RATE=%0.3f;"
-        "var FAST_UNTIL_FRACTION=%0.5f;"
-        "var NORMAL_TAIL_SECONDS=%0.3f;"
-        "var NORMAL_TAIL_RATE=%0.3f;"
         "var SEEK_STEP=%0.3f;"
         "var SEEK_INTERVAL=%0.3f;"
+        "var SEEK_END_MARGIN=%0.3f;"
         "var TIMER_SPEED=%0.3f;"
         "var ENABLE_POKE=%@;"
         "var POKE_DELAY=%0.3f;"
         "var KEY='__adspeed_runtime_v2';"
 
-        "function isVideo(v){"
-        "return !!v && String(v.tagName).toUpperCase()==='VIDEO';"
-        "}"
+        "function isVideo(v){return !!v&&String(v.tagName).toUpperCase()==='VIDEO';}"
+        "function activeVideoExists(){try{var vs=document.querySelectorAll('video');for(var i=0;i<vs.length;i++){var v=vs[i];if(!v.ended&&isFinite(v.duration)&&v.duration>0)return true;}}catch(e){}return false;}"
 
-        "function tailStart(v){"
+        /* End-card mode is observation/playable-timer behavior only.  Video acceleration remains baseline. */
+        "function enterEndcard(reason){"
         "try{"
-        "var d=Number(v.duration);"
-        "if(!isFinite(d)||d<=0)return null;"
-        "var byFraction=d*FAST_UNTIL_FRACTION;"
-        "var bySeconds=Math.max(0,d-NORMAL_TAIL_SECONDS);"
-        "return Math.max(0,Math.min(byFraction,bySeconds));"
-        "}catch(e){return null;}"
-        "}"
-
-        "function desiredRate(v){"
-        "var s=tailStart(v);"
-        "if(s!==null && Number(v.currentTime)>=s)return NORMAL_TAIL_RATE;"
-        "return VIDEO_RATE;"
+        "if(window.__adspeed_endcard_mode)return;"
+        "window.__adspeed_endcard_mode=true;"
+        "window.__adspeed_endcard_reason=String(reason||'unknown');"
+        "window.__adspeed_endcard_entered_ms=Date.now();"
+        /* Future timers created by the end card use the original browser timers. */
+        "if(window.__adspeed_nativeSetTimeout)window.setTimeout=window.__adspeed_nativeSetTimeout;"
+        "if(window.__adspeed_nativeSetInterval)window.setInterval=window.__adspeed_nativeSetInterval;"
+        "}catch(e){}"
         "}"
 
         "function applyVideo(v){"
         "if(!isVideo(v))return;"
         "try{"
-        "var r=desiredRate(v);"
-        "var ts=tailStart(v);"
-        "v.__adspeed_tail_start_seconds=ts;"
-        "v.__adspeed_tail_fast_until_fraction=FAST_UNTIL_FRACTION;"
-        "v.__adspeed_tail_min_seconds=NORMAL_TAIL_SECONDS;"
-        "v.defaultPlaybackRate=r;"
-        "if(Math.abs((v.playbackRate||1)-r)>0.001)v.playbackRate=r;"
-        "if(r===NORMAL_TAIL_RATE){"
-        "if(!v.__adspeed_tail_entered_ms)v.__adspeed_tail_entered_ms=Date.now();"
-        "v.__adspeed_tail_active=true;"
-        "}else{"
+        "v.defaultPlaybackRate=VIDEO_RATE;"
+        "if(Math.abs((v.playbackRate||1)-VIDEO_RATE)>0.001)v.playbackRate=VIDEO_RATE;"
         "v.__adspeed_tail_active=false;"
-        "}"
         "}catch(e){}"
         "}"
 
         "function scan(root){"
         "try{"
         "if(!root)return;"
-        "if(root.nodeType===1 && isVideo(root))applyVideo(root);"
-        "if(root.querySelectorAll){"
-        "var vs=root.querySelectorAll('video');"
-        "for(var i=0;i<vs.length;i++)applyVideo(vs[i]);"
-        "}"
+        "if(root.nodeType===1&&isVideo(root))applyVideo(root);"
+        "if(root.querySelectorAll){var vs=root.querySelectorAll('video');for(var i=0;i<vs.length;i++)applyVideo(vs[i]);}"
         "}catch(e){}"
         "}"
 
         "function installVideoSeekBoost(){"
         "if(window.__adspeed_seek_timer)return;"
-        "window.__adspeed_seek_timer=window.setInterval(function(){"
+        "var nativeInterval=window.__adspeed_nativeSetInterval||window.setInterval.bind(window);"
+        "window.__adspeed_seek_timer=nativeInterval(function(){"
         "try{"
         "var vs=document.querySelectorAll('video');"
         "for(var i=0;i<vs.length;i++){"
-        "var v=vs[i];"
-        "if(v.paused||v.ended)continue;"
-        "if(!isFinite(v.duration)||v.duration<=0)continue;"
-        "var s=tailStart(v);"
-        "if(s===null)continue;"
-        "if(v.currentTime>=s){applyVideo(v);continue;}"
-        "var next=Math.min(v.currentTime+SEEK_STEP,s);"
-        "if(next>v.currentTime)v.currentTime=next;"
+        "var v=vs[i];if(v.paused||v.ended)continue;if(!isFinite(v.duration)||v.duration<=0)continue;"
+        "var limit=Math.max(0,v.duration-SEEK_END_MARGIN);"
+        "if(v.currentTime<limit){var next=Math.min(v.currentTime+SEEK_STEP,limit);if(next>v.currentTime)v.currentTime=next;}"
         "applyVideo(v);"
         "}"
         "}catch(e){}"
@@ -526,113 +501,33 @@ static NSString *AdSpeedHTML5Script(void)
         "var nativeSetInterval=window.setInterval.bind(window);"
         "window.__adspeed_nativeSetTimeout=nativeSetTimeout;"
         "window.__adspeed_nativeSetInterval=nativeSetInterval;"
-
-        "window.setTimeout=function(fn,delay){"
-        "var args=Array.prototype.slice.call(arguments,2);"
-        "var d=Number(delay);"
-        "if(!isFinite(d))d=0;"
-        "if(d>20)d=Math.max(4,d/TIMER_SPEED);"
-        "return nativeSetTimeout(function(){"
-        "if(typeof fn==='function')return fn.apply(window,args);"
-        "try{return (0,eval)(String(fn));}catch(e){}"
-        "},d);"
-        "};"
-
-        "window.setInterval=function(fn,delay){"
-        "var args=Array.prototype.slice.call(arguments,2);"
-        "var d=Number(delay);"
-        "if(!isFinite(d))d=0;"
-        "if(d>20)d=Math.max(8,d/TIMER_SPEED);"
-        "return nativeSetInterval(function(){"
-        "if(typeof fn==='function')return fn.apply(window,args);"
-        "try{return (0,eval)(String(fn));}catch(e){}"
-        "},d);"
-        "};"
+        "window.setTimeout=function(fn,delay){var args=Array.prototype.slice.call(arguments,2);var d=Number(delay);if(!isFinite(d))d=0;if(d>20)d=Math.max(4,d/TIMER_SPEED);return nativeSetTimeout(function(){if(typeof fn==='function')return fn.apply(window,args);try{return(0,eval)(String(fn));}catch(e){}},d);};"
+        "window.setInterval=function(fn,delay){var args=Array.prototype.slice.call(arguments,2);var d=Number(delay);if(!isFinite(d))d=0;if(d>20)d=Math.max(8,d/TIMER_SPEED);return nativeSetInterval(function(){if(typeof fn==='function')return fn.apply(window,args);try{return(0,eval)(String(fn));}catch(e){}},d);};"
         "}"
 
-        "function findPlayableCanvas(){"
-        "try{"
-        "var cs=document.querySelectorAll('canvas');"
-        "var best=null,bestArea=0;"
-        "for(var i=0;i<cs.length;i++){"
-        "var c=cs[i];"
-        "var r=c.getBoundingClientRect();"
-        "var area=Math.max(0,r.width)*Math.max(0,r.height);"
-        "if(area>bestArea && r.width>=120 && r.height>=120){"
-        "best=c;bestArea=area;"
-        "}"
-        "}"
-        "return best;"
-        "}catch(e){return null;}"
-        "}"
-
-        "function pokePlayableCanvas(){"
-        "if(!ENABLE_POKE||window.__adspeed_canvas_poked)return;"
-        "try{"
-        "if(document.querySelector('video'))return;"
-        "var c=findPlayableCanvas();"
-        "if(!c)return;"
-        "window.__adspeed_canvas_poked=true;"
-        "var r=c.getBoundingClientRect();"
-        "var x=r.left+r.width*0.5;"
-        "var y=r.top+r.height*0.5;"
-        "var common={bubbles:true,cancelable:true,clientX:x,clientY:y,screenX:x,screenY:y};"
-        "try{c.dispatchEvent(new PointerEvent('pointerdown',Object.assign({pointerId:1,pointerType:'touch',isPrimary:true},common)));}catch(e){}"
-        "try{c.dispatchEvent(new MouseEvent('mousedown',common));}catch(e){}"
-        "try{c.dispatchEvent(new PointerEvent('pointerup',Object.assign({pointerId:1,pointerType:'touch',isPrimary:true},common)));}catch(e){}"
-        "try{c.dispatchEvent(new MouseEvent('mouseup',common));}catch(e){}"
-        "try{c.dispatchEvent(new MouseEvent('click',common));}catch(e){}"
-        "}catch(e){}"
-        "}"
+        "function findPlayableCanvas(){try{var cs=document.querySelectorAll('canvas'),best=null,bestArea=0;for(var i=0;i<cs.length;i++){var c=cs[i],r=c.getBoundingClientRect(),area=Math.max(0,r.width)*Math.max(0,r.height);if(area>bestArea&&r.width>=120&&r.height>=120){best=c;bestArea=area;}}return best;}catch(e){return null;}}"
+        "function pokePlayableCanvas(){if(!ENABLE_POKE||window.__adspeed_canvas_poked||window.__adspeed_endcard_mode)return;try{if(document.querySelector('video'))return;var c=findPlayableCanvas();if(!c)return;window.__adspeed_canvas_poked=true;var r=c.getBoundingClientRect(),x=r.left+r.width*.5,y=r.top+r.height*.5,common={bubbles:true,cancelable:true,clientX:x,clientY:y,screenX:x,screenY:y};try{c.dispatchEvent(new PointerEvent('pointerdown',Object.assign({pointerId:1,pointerType:'touch',isPrimary:true},common)));}catch(e){}try{c.dispatchEvent(new MouseEvent('mousedown',common));}catch(e){}try{c.dispatchEvent(new PointerEvent('pointerup',Object.assign({pointerId:1,pointerType:'touch',isPrimary:true},common)));}catch(e){}try{c.dispatchEvent(new MouseEvent('mouseup',common));}catch(e){}try{c.dispatchEvent(new MouseEvent('click',common));}catch(e){}}catch(e){}}"
 
         "if(!window[KEY]){"
-        "window[KEY]=true;"
-        "installTimerAcceleration();"
-        "installVideoSeekBoost();"
-
+        "window[KEY]=true;window.__adspeed_saw_video=false;"
+        "installTimerAcceleration();installVideoSeekBoost();"
         "var events=['play','playing','loadedmetadata','loadeddata','canplay','canplaythrough'];"
-        "for(var i=0;i<events.length;i++){"
-        "document.addEventListener(events[i],function(e){applyVideo(e.target);},true);"
-        "}"
-
-        "document.addEventListener('ratechange',function(e){"
-        "var v=e.target;"
-        "if(!isVideo(v))return;"
-        "try{"
-        "var wanted=desiredRate(v);"
-        "if(Math.abs((v.playbackRate||1)-wanted)>0.001){"
-        "var st=window.__adspeed_nativeSetTimeout||window.setTimeout;"
-        "st(function(){applyVideo(v);},0);"
-        "}"
-        "}catch(err){}"
-        "},true);"
-
-        "try{"
-        "new MutationObserver(function(records){"
-        "for(var i=0;i<records.length;i++){"
-        "var nodes=records[i].addedNodes||[];"
-        "for(var j=0;j<nodes.length;j++)scan(nodes[j]);"
-        "}"
-        "}).observe(document.documentElement||document,{childList:true,subtree:true});"
-        "}catch(e){}"
-
+        "for(var i=0;i<events.length;i++)document.addEventListener(events[i],function(e){if(isVideo(e.target)){window.__adspeed_saw_video=true;applyVideo(e.target);}},true);"
+        "document.addEventListener('ended',function(e){if(!isVideo(e.target))return;window.__adspeed_saw_video=true;var st=window.__adspeed_nativeSetTimeout||window.setTimeout;st(function(){if(!activeVideoExists())enterEndcard('video_ended');},0);},true);"
+        "document.addEventListener('ratechange',function(e){var v=e.target;if(!isVideo(v)||v.ended)return;try{if(Math.abs((v.playbackRate||1)-VIDEO_RATE)>0.001){var st=window.__adspeed_nativeSetTimeout||window.setTimeout;st(function(){applyVideo(v);},0);}}catch(err){}},true);"
+        "try{new MutationObserver(function(records){for(var i=0;i<records.length;i++){var nodes=records[i].addedNodes||[];for(var j=0;j<nodes.length;j++)scan(nodes[j]);}if(window.__adspeed_saw_video&&!activeVideoExists()){var st=window.__adspeed_nativeSetTimeout||window.setTimeout;st(function(){if(window.__adspeed_saw_video&&!activeVideoExists())enterEndcard('video_disappeared');},50);}}).observe(document.documentElement||document,{childList:true,subtree:true});}catch(e){}"
         "window.__adspeed_scan=function(){scan(document);};"
-        "var st=window.__adspeed_nativeSetTimeout||window.setTimeout;"
-        "st(pokePlayableCanvas,POKE_DELAY);"
+        "var st=window.__adspeed_nativeSetTimeout||window.setTimeout;st(pokePlayableCanvas,POKE_DELAY);"
         "}"
-
+        "if(document.querySelector('video'))window.__adspeed_saw_video=true;"
         "if(window.__adspeed_scan)window.__adspeed_scan();"
         "return true;"
-        "}catch(e){"
-        "return false;"
-        "}"
+        "}catch(e){return false;}"
         "})();",
         kHTML5PlaybackRate,
-        kHTML5FastUntilFraction,
-        kHTML5NormalTailSeconds,
-        kHTML5NormalTailRate,
         kVideoSeekStep,
         kVideoSeekIntervalMs,
+        kVideoSeekEndMargin,
         kPlayableTimerSpeed,
         kEnablePlayableCanvasPoke ? @"true" : @"false",
         kPlayablePokeDelayMs
@@ -663,11 +558,7 @@ static NSString *AdSpeedDiagnosticScript(void)
     "duration:(isFinite(v.duration)?Number(v.duration):null),"
     "currentTime:(isFinite(v.currentTime)?Number(v.currentTime):null),"
     "playbackRate:(isFinite(v.playbackRate)?Number(v.playbackRate):null),"
-    "ash_tail_active:!!v.__adspeed_tail_active,"
-    "ash_tail_start_seconds:(isFinite(v.__adspeed_tail_start_seconds)?Number(v.__adspeed_tail_start_seconds):null),"
-    "ash_tail_fast_until_fraction:(isFinite(v.__adspeed_tail_fast_until_fraction)?Number(v.__adspeed_tail_fast_until_fraction):null),"
-    "ash_tail_min_seconds:(isFinite(v.__adspeed_tail_min_seconds)?Number(v.__adspeed_tail_min_seconds):null),"
-    "ash_tail_entered_wall_seconds:(v.__adspeed_tail_entered_ms&&ds)?((v.__adspeed_tail_entered_ms-(ds.play_ms===null?ds.observed_ms:ds.play_ms))/1000):null,"
+    "ash_tail_active:false,"
     "paused:!!v.paused,"
     "ended:!!v.ended,"
     "diag_timeupdate_count:ds?Number(ds.timeupdate||0):0,"
@@ -727,6 +618,9 @@ static NSString *AdSpeedDiagnosticScript(void)
     "videos:videos,"
     "runtime_installed:!!window.__adspeed_runtime_v2,"
     "timer_acceleration_installed:!!window.__adspeed_timers_installed,"
+    "endcard_mode:!!window.__adspeed_endcard_mode,"
+    "endcard_reason:String(window.__adspeed_endcard_reason||''),"
+    "endcard_entered_epoch_ms:window.__adspeed_endcard_entered_ms?Number(window.__adspeed_endcard_entered_ms):null,"
     "video_seek_installed:!!window.__adspeed_seek_timer,"
     "canvas_poke_applied:!!window.__adspeed_canvas_poked"
     "};"
