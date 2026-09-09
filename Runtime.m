@@ -3,11 +3,11 @@
 #import <WebKit/WebKit.h>
 #import <objc/runtime.h>
 
-static NSString * const kAddSpeedHackVersion = @"1.2.2";
-static NSString * const kAddSpeedHackLogDirectory = @"AddSpeedHackLogs";
-static NSString * const kAddSpeedHackVersionDirectory = @"v1.2.2";
-static NSString * const kAddSpeedHackLogStem = @"ash v.1.2.2 log";
-static NSString * const kAddSpeedHackBatchStem = @"ash v.1.2.2 batch";
+static NSString * const kAddSpeedHackVersion = @"1.2.3";
+static NSString * const kAddSpeedHackLogDirectory = @"AdSpeedHackLogs";
+static NSString * const kAddSpeedHackVersionDirectory = @"ver.1.2.3";
+static NSString * const kAddSpeedHackLogStem = @"ASH_ver.1.2.3_log";
+static NSString * const kAddSpeedHackBatchStem = @"ASH_ver.1.2.3_batch";
 
 static dispatch_queue_t AddSpeedHackLogQueue(void)
 {
@@ -53,7 +53,7 @@ static NSString *AddSpeedHackBatchCounterPath(void)
 
 static NSString *AddSpeedHackNumberedLogName(NSUInteger number)
 {
-    return [NSString stringWithFormat:@"%@ %02lu.jsonl", kAddSpeedHackLogStem, (unsigned long)number];
+    return [NSString stringWithFormat:@"%@_%02lu.jsonl", kAddSpeedHackLogStem, (unsigned long)number];
 }
 
 static NSString *AddSpeedHackNumberedLogPath(NSUInteger number)
@@ -94,7 +94,7 @@ static void AddSpeedHackPruneArchives(void)
     if (!files) return;
 
     NSString *escaped = [NSRegularExpression escapedPatternForString:kAddSpeedHackBatchStem];
-    NSString *pattern = [NSString stringWithFormat:@"^%@ (\\d+)\\.jsonl$", escaped];
+    NSString *pattern = [NSString stringWithFormat:@"^%@_(\\d+)\\.jsonl$", escaped];
     NSRegularExpression *rx = [NSRegularExpression regularExpressionWithPattern:pattern options:0 error:nil];
     NSMutableArray<NSDictionary *> *batches = [NSMutableArray array];
 
@@ -131,7 +131,7 @@ static BOOL AddSpeedHackArchiveNumberedLogs(void)
     if (sources.count == 0) return YES;
 
     NSUInteger batchNumber = AddSpeedHackReadUnsignedCounter(AddSpeedHackBatchCounterPath()) + 1;
-    NSString *batchName = [NSString stringWithFormat:@"%@ %03lu.jsonl", kAddSpeedHackBatchStem, (unsigned long)batchNumber];
+    NSString *batchName = [NSString stringWithFormat:@"%@_%03lu.jsonl", kAddSpeedHackBatchStem, (unsigned long)batchNumber];
     NSString *batchPath = [archive stringByAppendingPathComponent:batchName];
     [fm createFileAtPath:batchPath contents:nil attributes:nil];
     NSFileHandle *out = [NSFileHandle fileHandleForWritingAtPath:batchPath];
@@ -315,6 +315,48 @@ static void AddSpeedHackWriteLogInternal(NSDictionary *fields, BOOL beginNewAd, 
     });
 }
 
+
+static void AddSpeedHackWriteLogToPath(NSDictionary *fields, NSString *path)
+{
+    if (![fields isKindOfClass:[NSDictionary class]] || path.length == 0) return;
+
+    NSMutableDictionary *record = [NSMutableDictionary dictionaryWithDictionary:fields];
+    record[@"timestamp"] = AddSpeedHackTimestamp();
+    record[@"version"] = kAddSpeedHackVersion;
+
+    NSString *bundleID = NSBundle.mainBundle.bundleIdentifier;
+    if (bundleID.length > 0) record[@"bundle_id"] = bundleID;
+    NSString *processName = NSProcessInfo.processInfo.processName;
+    if (processName.length > 0) record[@"process"] = processName;
+
+    dispatch_async(AddSpeedHackLogQueue(), ^{
+        @autoreleasepool {
+            NSData *json = [NSJSONSerialization dataWithJSONObject:record options:0 error:nil];
+            if (!json) return;
+            NSString *directory = [path stringByDeletingLastPathComponent];
+            [[NSFileManager defaultManager] createDirectoryAtPath:directory
+                                      withIntermediateDirectories:YES
+                                                       attributes:nil
+                                                            error:nil];
+            NSMutableData *line = [NSMutableData dataWithData:json];
+            const char newline = '\n';
+            [line appendBytes:&newline length:1];
+            if (![[NSFileManager defaultManager] fileExistsAtPath:path]) {
+                [line writeToFile:path atomically:YES];
+                return;
+            }
+            NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
+            if (!handle) return;
+            @try {
+                [handle seekToEndOfFile];
+                [handle writeData:line];
+                [handle closeFile];
+            } @catch (__unused NSException *exception) {
+                @try { [handle closeFile]; } @catch (__unused NSException *closeException) {}
+            }
+        }
+    });
+}
 
 static void AddSpeedHackWriteLog(NSDictionary *fields)
 {
@@ -604,7 +646,27 @@ static NSString *AdSpeedDiagnosticScript(void)
 
 static const void *kAddSpeedHackWKHandledSurfaceKey = &kAddSpeedHackWKHandledSurfaceKey;
 static const void *kAddSpeedHackWKSessionKey = &kAddSpeedHackWKSessionKey;
+static const void *kAddSpeedHackWKLogStartedKey = &kAddSpeedHackWKLogStartedKey;
+static const void *kAddSpeedHackWKLogPathKey = &kAddSpeedHackWKLogPathKey;
 static const void *kAddSpeedHackAVLoggedKey = &kAddSpeedHackAVLoggedKey;
+
+static NSString *AddSpeedHackLogPathForWebView(WKWebView *webView, BOOL createIfNeeded)
+{
+    if (!webView) return nil;
+    NSString *path = objc_getAssociatedObject(webView, kAddSpeedHackWKLogPathKey);
+    if (path.length || !createIfNeeded) return path;
+
+    __block NSString *newPath = nil;
+    dispatch_sync(AddSpeedHackLogQueue(), ^{
+        newPath = AddSpeedHackNewLogPath();
+    });
+    if (newPath.length) {
+        objc_setAssociatedObject(webView, kAddSpeedHackWKLogPathKey, newPath, OBJC_ASSOCIATION_COPY_NONATOMIC);
+        objc_setAssociatedObject(webView, kAddSpeedHackWKLogStartedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        gAddSpeedHackActiveLogPath = newPath;
+    }
+    return newPath;
+}
 
 static void AddSpeedHackProbeWKWebView(WKWebView *webView, NSTimeInterval delay, NSString *sessionID)
 {
@@ -656,18 +718,34 @@ static void AddSpeedHackProbeWKWebView(WKWebView *webView, NSTimeInterval delay,
         }
 
         record[@"known_surface_detected_this_probe"] = @(knownSurface);
-        AddSpeedHackWriteLog(record);
 
-        if (delay >= kProbeDelays[kProbeDelayCount - 1] && isCurrentSession) {
+        BOOL iframeOnlyCandidate = [record[@"iframe_only_candidate"] boolValue];
+        BOOL adEvidence = knownSurface || iframeOnlyCandidate;
+        NSString *logPath = AddSpeedHackLogPathForWebView(webView, NO);
+        BOOL logStarted = (logPath.length > 0);
+        if (adEvidence && !logStarted) {
+            logPath = AddSpeedHackLogPathForWebView(webView, YES);
+            logStarted = (logPath.length > 0);
+            if (logStarted) {
+                NSMutableDictionary *startRecord = [record mutableCopy];
+                startRecord[@"event"] = @"ad_log_started";
+                startRecord[@"start_reason"] = knownSurface ? @"handled_html_surface" : @"iframe_only_candidate";
+                AddSpeedHackWriteLogToPath(startRecord, logPath);
+            }
+        } else if (logStarted) {
+            AddSpeedHackWriteLogToPath(record, logPath);
+        }
+
+        if (delay >= kProbeDelays[kProbeDelayCount - 1] && isCurrentSession && logStarted) {
             BOOL everSawHandledSurface = [objc_getAssociatedObject(webView, kAddSpeedHackWKHandledSurfaceKey) boolValue];
-            AddSpeedHackWriteLog(@{
+            AddSpeedHackWriteLogToPath(@{
                 @"event": @"wk_coverage_summary",
                 @"session_id": sessionID ?: @"",
                 @"native_page_url": nativeURL ?: @"",
                 @"handled_html_surface_seen": @(everSawHandledSurface),
                 @"no_handled_html_surface_observed": @(!everSawHandledSurface),
                 @"note": @"Observation only. This is not a reward-success or reward-failure judgment."
-            });
+            }, logPath);
         }
     }];
 }
@@ -703,10 +781,11 @@ static void ScheduleWKWebViewInjection(WKWebView *webView, BOOL beginNewAd, NSSt
         @"session_id": sessionID,
         @"native_page_url": webView.URL.absoluteString ?: @"",
         @"load_kind": loadKind ?: @"unknown",
-        @"root_boundary_candidate": @(beginNewAd)
+        @"root_boundary_candidate": @NO
     } mutableCopy];
     if (rootURL.length) navigationRecord[@"root_candidate_url"] = rootURL;
-    AddSpeedHackBeginAdLog(navigationRecord, beginNewAd ? rootURL : nil);
+    NSString *logPath = AddSpeedHackLogPathForWebView(webView, NO);
+    if (logPath.length) AddSpeedHackWriteLogToPath(navigationRecord, logPath);
 
     for (NSUInteger i = 0; i < kProbeDelayCount; i++) {
         NSTimeInterval delay = kProbeDelays[i];
@@ -747,12 +826,12 @@ static void SwizzleInstanceMethod(Class cls, SEL originalSEL, SEL replacementSEL
     }
 }
 
-@interface AVPlayer (AdSpeedRuntimeV2)
+@interface AVPlayer (AdSpeedHackRuntime)
 - (void)adspeed_setRate:(float)rate;
 - (float)adspeed_rate;
 @end
 
-@implementation AVPlayer (AdSpeedRuntimeV2)
+@implementation AVPlayer (AdSpeedHackRuntime)
 
 - (void)adspeed_setRate:(float)rate
 {
@@ -779,7 +858,7 @@ static void SwizzleInstanceMethod(Class cls, SEL originalSEL, SEL replacementSEL
 }
 @end
 
-@interface WKWebView (AdSpeedRuntimeV2)
+@interface WKWebView (AdSpeedHackRuntime)
 - (WKNavigation *)adspeed_loadRequest:(NSURLRequest *)request;
 - (WKNavigation *)adspeed_loadHTMLString:(NSString *)string baseURL:(NSURL *)baseURL;
 - (WKNavigation *)adspeed_loadData:(NSData *)data MIMEType:(NSString *)MIMEType characterEncodingName:(NSString *)characterEncodingName baseURL:(NSURL *)baseURL;
@@ -788,7 +867,7 @@ static void SwizzleInstanceMethod(Class cls, SEL originalSEL, SEL replacementSEL
 - (WKNavigation *)adspeed_reloadFromOrigin;
 @end
 
-@implementation WKWebView (AdSpeedRuntimeV2)
+@implementation WKWebView (AdSpeedHackRuntime)
 
 - (WKNavigation *)adspeed_loadRequest:(NSURLRequest *)request
 {
@@ -837,18 +916,6 @@ __attribute__((constructor))
 static void AdSpeedInit(void)
 {
     @autoreleasepool {
-        AddSpeedHackWriteLog(@{
-            @"event": @"runtime_loaded",
-            @"log_file": @"Documents/AddSpeedHackLogs/v1.2.2/ash v.1.2.2 log NN.jsonl",
-            @"reward_inference_enabled": @NO,
-            @"rolling_numbered_logs": @YES,
-            @"numbered_log_range": @"01-99",
-            @"archive_batches_kept": @10,
-            @"archive_directory": @"Documents/AddSpeedHackLogs/v1.2.2/Archive",
-            @"iframe_diagnostics": @"read_only_main_frame_observation",
-            @"video_event_diagnostics": @"timeupdate_progress_ended_q25_q50_q75_q95_wall_clock"
-        });
-
         Class avPlayerClass = objc_getClass("AVPlayer");
         if (avPlayerClass) {
             SwizzleInstanceMethod(avPlayerClass, @selector(setRate:), @selector(adspeed_setRate:));
