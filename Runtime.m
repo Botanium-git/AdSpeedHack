@@ -3,11 +3,11 @@
 #import <WebKit/WebKit.h>
 #import <objc/runtime.h>
 
-static NSString * const kAddSpeedHackVersion = @"1.6.0";
+static NSString * const kAddSpeedHackVersion = @"1.7.0";
 static NSString * const kAddSpeedHackLogDirectory = @"AdSpeedHackLogs";
-static NSString * const kAddSpeedHackVersionDirectory = @"ver.1.6.0";
-static NSString * const kAddSpeedHackLogStem = @"ASH_ver.1.6.0_log";
-static NSString * const kAddSpeedHackBatchStem = @"ASH_ver.1.6.0_batch";
+static NSString * const kAddSpeedHackVersionDirectory = @"ver.1.7.0";
+static NSString * const kAddSpeedHackLogStem = @"ASH_ver.1.7.0_log";
+static NSString * const kAddSpeedHackBatchStem = @"ASH_ver.1.7.0_batch";
 
 static dispatch_queue_t AddSpeedHackLogQueue(void)
 {
@@ -447,12 +447,22 @@ static NSString *AdSpeedHTML5Script(void)
         "return !!v && String(v.tagName).toUpperCase()==='VIDEO';"
         "}"
 
+        "function problemTailActive(v){"
+        "try{"
+        "var tail=Number(window.__ash_problem_tail_seconds||0);"
+        "if(!(tail>0))return false;"
+        "var d=Number(v.duration||0),t=Number(v.currentTime||0);"
+        "return isFinite(d)&&d>0&&isFinite(t)&&(d-t)<=tail;"
+        "}catch(e){return false;}"
+        "}"
+
         "function applyVideo(v){"
         "if(!isVideo(v))return;"
-        "try{v.defaultPlaybackRate=VIDEO_RATE;}catch(e){}"
+        "var target=problemTailActive(v)?1.0:VIDEO_RATE;"
+        "try{v.defaultPlaybackRate=target;}catch(e){}"
         "try{"
-        "if(Math.abs((v.playbackRate||1)-VIDEO_RATE)>0.001){"
-        "v.playbackRate=VIDEO_RATE;"
+        "if(Math.abs((v.playbackRate||1)-target)>0.001){"
+        "v.playbackRate=target;"
         "}"
         "}catch(e){}"
         "}"
@@ -477,7 +487,10 @@ static NSString *AdSpeedHTML5Script(void)
         "var v=vs[i];"
         "if(v.paused||v.ended)continue;"
         "if(!isFinite(v.duration)||v.duration<=0)continue;"
+        "if(problemTailActive(v)){applyVideo(v);continue;}"
+        "var tail=Number(window.__ash_problem_tail_seconds||0);"
         "var safeEnd=Math.max(0,v.duration-0.35);"
+        "if(tail>0)safeEnd=Math.min(safeEnd,Math.max(0,v.duration-tail));"
         "if(v.currentTime>=safeEnd)continue;"
         "var next=Math.min(v.currentTime+SEEK_STEP,safeEnd);"
         "if(next>v.currentTime)v.currentTime=next;"
@@ -566,7 +579,8 @@ static NSString *AdSpeedHTML5Script(void)
         "var v=e.target;"
         "if(!isVideo(v))return;"
         "try{"
-        "if(Math.abs((v.playbackRate||1)-VIDEO_RATE)>0.001){"
+        "var target=problemTailActive(v)?1.0:VIDEO_RATE;"
+        "if(Math.abs((v.playbackRate||1)-target)>0.001){"
         "var st=window.__adspeed_nativeSetTimeout||window.setTimeout;"
         "st(function(){applyVideo(v);},0);"
         "}"
@@ -583,6 +597,7 @@ static NSString *AdSpeedHTML5Script(void)
         "}catch(e){}"
 
         "window.__adspeed_scan=function(){scan(document);};"
+        "window.__adspeed_apply_problem_tail=function(){scan(document);};"
         "var st=window.__adspeed_nativeSetTimeout||window.setTimeout;"
         "st(pokePlayableCanvas,POKE_DELAY);"
         "}"
@@ -626,7 +641,7 @@ static NSString *AdSpeedDiagnosticScript(void)
     "duration:(isFinite(v.duration)?Number(v.duration):null),"
     "currentTime:(isFinite(v.currentTime)?Number(v.currentTime):null),"
     "playbackRate:(isFinite(v.playbackRate)?Number(v.playbackRate):null),"
-    "ash_tail_active:false,"
+    "ash_tail_active:(function(){try{var tail=Number(window.__ash_problem_tail_seconds||0),d=Number(v.duration||0),t=Number(v.currentTime||0);return tail>0&&d>0&&isFinite(d)&&isFinite(t)&&(d-t)<=tail;}catch(e){return false;}})(),"
     "paused:!!v.paused,"
     "ended:!!v.ended,"
     "diag_timeupdate_count:ds?Number(ds.timeupdate||0):0,"
@@ -686,6 +701,7 @@ static NSString *AdSpeedDiagnosticScript(void)
     "videos:videos,"
     "runtime_installed:!!window.__adspeed_runtime_v2,"
     "timer_acceleration_installed:!!window.__adspeed_timers_installed,"
+    "problem_tail_seconds:Number(window.__ash_problem_tail_seconds||0),"
     "endcard_mode:!!window.__adspeed_endcard_mode,"
     "endcard_reason:String(window.__adspeed_endcard_reason||''),"
     "endcard_entered_epoch_ms:window.__adspeed_endcard_entered_ms?Number(window.__adspeed_endcard_entered_ms):null,"
@@ -714,9 +730,9 @@ static NSTimeInterval gAddSpeedHackAdSessionLastEvidenceTime = 0;
 static NSHashTable<WKWebView *> *gAddSpeedHackAdSessionParticipants = nil;
 static const NSTimeInterval kAddSpeedHackAdSessionStaleSeconds = 40.0;
 static NSTimeInterval gAddSpeedHackAdSessionStartTime = 0;
-static BOOL gAddSpeedHackAdSessionNeeds20SecondGate = NO;
-static NSString *gAddSpeedHackAdSessionGateReason = nil;
-static const NSTimeInterval kAddSpeedHackProblemAdMinimumElapsedSeconds = 20.0;
+static BOOL gAddSpeedHackAdSessionNeedsProblemTail = NO;
+static NSString *gAddSpeedHackAdSessionProblemTailReason = nil;
+static const double kAddSpeedHackProblemTailSeconds = 20.0;
 static const NSTimeInterval kAddSpeedHackSessionRemovalGraceSeconds = 6.0;
 
 static NSTimeInterval AddSpeedHackNow(void)
@@ -741,8 +757,8 @@ static void AddSpeedHackResetAdSessionState(void)
     gAddSpeedHackAdSessionWeakSourceCount = 0;
     gAddSpeedHackAdSessionLastEvidenceTime = 0;
     gAddSpeedHackAdSessionStartTime = 0;
-    gAddSpeedHackAdSessionNeeds20SecondGate = NO;
-    gAddSpeedHackAdSessionGateReason = nil;
+    gAddSpeedHackAdSessionNeedsProblemTail = NO;
+    gAddSpeedHackAdSessionProblemTailReason = nil;
     gAddSpeedHackAdSessionParticipants = nil;
 }
 
@@ -757,8 +773,9 @@ static void AddSpeedHackEndAdSession(NSString *reason)
             @"weak_source_count": @(gAddSpeedHackAdSessionWeakSourceCount),
             @"end_reason": reason ?: @"unknown",
             @"real_ad_elapsed_seconds": @(gAddSpeedHackAdSessionStartTime > 0 ? MAX(0, AddSpeedHackNow() - gAddSpeedHackAdSessionStartTime) : 0.0),
-            @"minimum_elapsed_gate_active": @(gAddSpeedHackAdSessionNeeds20SecondGate),
-            @"minimum_ad_elapsed_seconds": @(gAddSpeedHackAdSessionNeeds20SecondGate ? kAddSpeedHackProblemAdMinimumElapsedSeconds : 0.0)
+            @"problem_tail_active": @(gAddSpeedHackAdSessionNeedsProblemTail),
+            @"problem_tail_seconds": @(gAddSpeedHackAdSessionNeedsProblemTail ? kAddSpeedHackProblemTailSeconds : 0.0),
+            @"problem_tail_reason": gAddSpeedHackAdSessionProblemTailReason ?: @""
         }, path);
     }
     AddSpeedHackResetAdSessionState();
@@ -787,8 +804,8 @@ static NSString *AddSpeedHackEnsureAdSession(WKWebView *webView, BOOL strongEvid
         gAddSpeedHackAdSessionConfidence = strongEvidence ? @"high" : @"low";
         gAddSpeedHackAdSessionWeakSourceCount = 0;
         gAddSpeedHackAdSessionStartTime = AddSpeedHackNow();
-        gAddSpeedHackAdSessionNeeds20SecondGate = NO;
-        gAddSpeedHackAdSessionGateReason = nil;
+        gAddSpeedHackAdSessionNeedsProblemTail = NO;
+        gAddSpeedHackAdSessionProblemTailReason = nil;
         gAddSpeedHackAdSessionParticipants = [NSHashTable weakObjectsHashTable];
         created = YES;
         gAddSpeedHackActiveLogPath = newPath;
@@ -822,7 +839,7 @@ static NSString *AddSpeedHackEnsureAdSession(WKWebView *webView, BOOL strongEvid
             @"confidence": gAddSpeedHackAdSessionConfidence ?: @"low",
             @"start_reason": reason ?: @"unknown",
             @"state": strongEvidence ? @"confirmed" : @"pending",
-            @"minimum_ad_elapsed_seconds": @0,
+            @"legacy_minimum_ad_elapsed_seconds": @0,
             @"real_ad_elapsed_seconds": @0
         }, gAddSpeedHackAdSessionLogPath);
     } else if (![oldConfidence isEqualToString:gAddSpeedHackAdSessionConfidence]) {
@@ -858,12 +875,12 @@ static NSString *AddSpeedHackKnownProblemFamilyFromRecord(NSDictionary *record)
     return nil;
 }
 
-static void AddSpeedHackApply20SecondGateToWebView(WKWebView *webView)
+static void AddSpeedHackApplyProblemTailToWebView(WKWebView *webView)
 {
-    if (!webView || !gAddSpeedHackAdSessionNeeds20SecondGate || gAddSpeedHackAdSessionStartTime <= 0) return;
-    NSTimeInterval elapsed = MAX(0, AddSpeedHackNow() - gAddSpeedHackAdSessionStartTime);
-    NSTimeInterval remaining = MAX(0, kAddSpeedHackProblemAdMinimumElapsedSeconds - elapsed);
-    NSString *js = [NSString stringWithFormat:@"(function(){try{var until=Date.now()+%0.0f;if(window.__ash_gate_until&&window.__ash_gate_until>until)until=window.__ash_gate_until;window.__ash_gate_until=until;if(!window.__ash_gate_installed){window.__ash_gate_installed=true;var block=function(e){if(Date.now()<window.__ash_gate_until){e.preventDefault();e.stopImmediatePropagation();return false;}};['click','touchstart','touchend','pointerdown','pointerup'].forEach(function(n){document.addEventListener(n,block,true);});}return true;}catch(e){return false;}})()", remaining * 1000.0];
+    if (!webView || !gAddSpeedHackAdSessionNeedsProblemTail) return;
+    NSString *js = [NSString stringWithFormat:
+        @"(function(){try{window.__ash_problem_tail_seconds=%0.3f;if(window.__adspeed_apply_problem_tail)window.__adspeed_apply_problem_tail();return true;}catch(e){return false;}})()",
+        kAddSpeedHackProblemTailSeconds];
     [webView evaluateJavaScript:js completionHandler:nil];
 }
 
@@ -894,15 +911,15 @@ static void AddSpeedHackProbeWKWebView(WKWebView *webView, NSTimeInterval delay,
             [record addEntriesFromDictionary:identity];
 
             NSString *problemFamily = AddSpeedHackKnownProblemFamilyFromRecord(record);
-            if (problemFamily.length && !gAddSpeedHackAdSessionNeeds20SecondGate) {
-                gAddSpeedHackAdSessionNeeds20SecondGate = YES;
-                gAddSpeedHackAdSessionGateReason = problemFamily;
+            if (problemFamily.length && !gAddSpeedHackAdSessionNeedsProblemTail) {
+                gAddSpeedHackAdSessionNeedsProblemTail = YES;
+                gAddSpeedHackAdSessionProblemTailReason = problemFamily;
             }
-            if (gAddSpeedHackAdSessionNeeds20SecondGate) AddSpeedHackApply20SecondGateToWebView(webView);
-            record[@"minimum_ad_elapsed_seconds"] = @(gAddSpeedHackAdSessionNeeds20SecondGate ? kAddSpeedHackProblemAdMinimumElapsedSeconds : 0.0);
+            if (gAddSpeedHackAdSessionNeedsProblemTail) AddSpeedHackApplyProblemTailToWebView(webView);
             record[@"real_ad_elapsed_seconds"] = @(gAddSpeedHackAdSessionStartTime > 0 ? MAX(0, AddSpeedHackNow() - gAddSpeedHackAdSessionStartTime) : 0.0);
-            record[@"minimum_elapsed_gate_active"] = @(gAddSpeedHackAdSessionNeeds20SecondGate);
-            record[@"minimum_elapsed_gate_reason"] = gAddSpeedHackAdSessionGateReason ?: @"";
+            record[@"problem_tail_active"] = @(gAddSpeedHackAdSessionNeedsProblemTail);
+            record[@"problem_tail_seconds"] = @(gAddSpeedHackAdSessionNeedsProblemTail ? kAddSpeedHackProblemTailSeconds : 0.0);
+            record[@"problem_tail_reason"] = gAddSpeedHackAdSessionProblemTailReason ?: @"";
 
             NSInteger videoCount = [snapshot[@"video_count"] integerValue];
             NSInteger canvasCount = [snapshot[@"canvas_count"] integerValue];

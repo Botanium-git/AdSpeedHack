@@ -14,7 +14,7 @@
 - No reward callback or server completion is spoofed.
 
 
-## v1.6.0
+## v1.7.0
 - Restores baseline full-speed HTML5 behavior; removes v1.5.x end-card slowdown.
 - Selective 20-second real-elapsed gate only for known problem creative families.
 - Current signatures: Gossip Harbor (`oe8f937c_`) and Meje Kyodan (`o6b5ee74_`). Unknown ads get no added wait.
@@ -23,3 +23,12 @@
 - Extends WKWebView removal grace from 1.5s to 6s to reduce split sessions during transitions.
 - VoidPet is not hard-coded yet because available VoidPet logs predate stable v1.3+ identity data; this avoids slowing unrelated ads.
 - No reward callback/server completion spoofing.
+
+
+## v1.7.0
+- Removed the v1.6.0 20-second close gate.
+- Known unresolved ad families only: accelerate until the final 20 seconds of the video, then switch video playback to 1x and stop seek-boosting.
+- Ads that already work remain on the original full-speed path with no added wait or slow tail.
+- The 6-second session-removal grace from v1.6.0 is retained to avoid split logs.
+- Logs now include problem_tail_active/problem_tail_seconds/problem_tail_reason and per-video ash_tail_active.
+- No reward callback or server-completion spoofing.
