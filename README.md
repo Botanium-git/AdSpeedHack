@@ -32,3 +32,11 @@
 - The 6-second session-removal grace from v1.6.0 is retained to avoid split logs.
 - Logs now include problem_tail_active/problem_tail_seconds/problem_tail_reason and per-video ash_tail_active.
 - No reward callback or server-completion spoofing.
+
+
+## v1.8.0
+- Restores full-speed behavior for all ads; the v1.7.0 20-second normal-speed tail is disabled.
+- Keeps known-problem-family tagging for Gossip Harbor / Meje Kyodan style assets, but does not infer reward success.
+- Adds read-only asynchronous diagnostics for resource loads, fetch/XHR, window message events, visibility/page lifecycle, and video playing/ended events.
+- `wk_probe` includes only newly observed async events (`async_events_new`) to compare user-confirmed reward-success and reward-failure runs.
+- No reward callbacks or server completion are spoofed.

@@ -3,11 +3,11 @@
 #import <WebKit/WebKit.h>
 #import <objc/runtime.h>
 
-static NSString * const kAddSpeedHackVersion = @"1.7.0";
+static NSString * const kAddSpeedHackVersion = @"1.8.0";
 static NSString * const kAddSpeedHackLogDirectory = @"AdSpeedHackLogs";
-static NSString * const kAddSpeedHackVersionDirectory = @"ver.1.7.0";
-static NSString * const kAddSpeedHackLogStem = @"ASH_ver.1.7.0_log";
-static NSString * const kAddSpeedHackBatchStem = @"ASH_ver.1.7.0_batch";
+static NSString * const kAddSpeedHackVersionDirectory = @"ver.1.8.0";
+static NSString * const kAddSpeedHackLogStem = @"ASH_ver.1.8.0_log";
+static NSString * const kAddSpeedHackBatchStem = @"ASH_ver.1.8.0_batch";
 
 static dispatch_queue_t AddSpeedHackLogQueue(void)
 {
@@ -442,6 +442,26 @@ static NSString *AdSpeedHTML5Script(void)
         "var ENABLE_POKE=%@;"
         "var POKE_DELAY=%0.3f;"
         "var KEY='__adspeed_runtime_v2';"
+        "var DKEY='__ash_diag_v180';"
+        "function ashPush(kind,data){try{"
+        "if(!window[DKEY])window[DKEY]={seq:0,events:[]};"
+        "var st=window[DKEY];var ev={seq:++st.seq,kind:String(kind||''),wall_ms:Date.now()};"
+        "if(data&&typeof data==='object'){for(var k in data){try{var v=data[k];if(v!==undefined&&v!==null)ev[k]=String(v).slice(0,240);}catch(e){}}}"
+        "st.events.push(ev);if(st.events.length>160)st.events.splice(0,st.events.length-160);"
+        "}catch(e){}}"
+        "function installAsyncDiagnostics(){try{"
+        "if(window.__ash_async_diag_installed)return;window.__ash_async_diag_installed=true;"
+        "ashPush('diag_installed',{href:String(location.href||'')});"
+        "document.addEventListener('visibilitychange',function(){ashPush('visibilitychange',{state:document.visibilityState,hidden:document.hidden});},true);"
+        "window.addEventListener('pagehide',function(e){ashPush('pagehide',{persisted:!!e.persisted});},true);"
+        "window.addEventListener('pageshow',function(e){ashPush('pageshow',{persisted:!!e.persisted});},true);"
+        "window.addEventListener('message',function(e){var d='';try{d=typeof e.data==='string'?e.data:JSON.stringify(e.data);}catch(x){d=String(e.data);}ashPush('message_received',{origin:e.origin||'',data:d||''});},true);"
+        "document.addEventListener('ended',function(e){if(isVideo(e.target))ashPush('video_ended',{src:e.target.currentSrc||e.target.src||'',duration:e.target.duration||0});},true);"
+        "document.addEventListener('playing',function(e){if(isVideo(e.target))ashPush('video_playing',{src:e.target.currentSrc||e.target.src||'',current:e.target.currentTime||0});},true);"
+        "try{var of=window.fetch;if(of){window.fetch=function(){var u='';try{u=String(arguments[0]&&arguments[0].url||arguments[0]||'');}catch(e){}ashPush('fetch_start',{url:u});var r=of.apply(this,arguments);try{r.then(function(x){ashPush('fetch_done',{url:u,status:x&&x.status});},function(x){ashPush('fetch_error',{url:u,error:x});});}catch(e){}return r;};}}catch(e){}"
+        "try{var xo=XMLHttpRequest.prototype.open,xs=XMLHttpRequest.prototype.send;XMLHttpRequest.prototype.open=function(m,u){this.__ash_m=m;this.__ash_u=u;return xo.apply(this,arguments);};XMLHttpRequest.prototype.send=function(){var x=this;ashPush('xhr_start',{method:x.__ash_m||'',url:x.__ash_u||''});x.addEventListener('loadend',function(){ashPush('xhr_done',{method:x.__ash_m||'',url:x.__ash_u||'',status:x.status});},{once:true});return xs.apply(this,arguments);};}catch(e){}"
+        "try{if(window.PerformanceObserver){var po=new PerformanceObserver(function(list){var es=list.getEntries();for(var i=0;i<es.length;i++){var x=es[i];ashPush('resource',{name:x.name||'',initiator:x.initiatorType||'',duration:Math.round(x.duration||0)});}});po.observe({entryTypes:['resource']});}}catch(e){}"
+        "}catch(e){}}"
 
         "function isVideo(v){"
         "return !!v && String(v.tagName).toUpperCase()==='VIDEO';"
@@ -567,6 +587,7 @@ static NSString *AdSpeedHTML5Script(void)
 
         "if(!window[KEY]){"
         "window[KEY]=true;"
+        "installAsyncDiagnostics();"
         "installTimerAcceleration();"
         "installVideoSeekBoost();"
 
@@ -706,7 +727,9 @@ static NSString *AdSpeedDiagnosticScript(void)
     "endcard_reason:String(window.__adspeed_endcard_reason||''),"
     "endcard_entered_epoch_ms:window.__adspeed_endcard_entered_ms?Number(window.__adspeed_endcard_entered_ms):null,"
     "video_seek_installed:!!window.__adspeed_seek_timer,"
-    "canvas_poke_applied:!!window.__adspeed_canvas_poked"
+    "canvas_poke_applied:!!window.__adspeed_canvas_poked,"
+    "async_diag_seq:(window.__ash_diag_v180&&window.__ash_diag_v180.seq)||0,"
+    "async_diag_events:(window.__ash_diag_v180&&window.__ash_diag_v180.events)?window.__ash_diag_v180.events.slice(-80):[]"
     "};"
     "}catch(e){return {diagnostic_error:String(e)};}"
     "})();";
@@ -720,6 +743,7 @@ static const void *kAddSpeedHackWKWeakEvidenceKey = &kAddSpeedHackWKWeakEvidence
 static const void *kAddSpeedHackWKParticipantKey = &kAddSpeedHackWKParticipantKey;
 static const void *kAddSpeedHackAVLoggedKey = &kAddSpeedHackAVLoggedKey;
 static const void *kAddSpeedHackWKLastFingerprintKey = &kAddSpeedHackWKLastFingerprintKey;
+static const void *kAddSpeedHackWKLastAsyncDiagSeqKey = &kAddSpeedHackWKLastAsyncDiagSeqKey;
 
 // v1.2.5: one parent ad session owns one log file. Individual WKWebViews join it.
 static NSString *gAddSpeedHackAdSessionID = nil;
@@ -749,6 +773,7 @@ static void AddSpeedHackResetAdSessionState(void)
         objc_setAssociatedObject(webView, kAddSpeedHackWKWeakEvidenceKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         objc_setAssociatedObject(webView, kAddSpeedHackWKParticipantKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         objc_setAssociatedObject(webView, kAddSpeedHackWKLastFingerprintKey, nil, OBJC_ASSOCIATION_COPY_NONATOMIC);
+        objc_setAssociatedObject(webView, kAddSpeedHackWKLastAsyncDiagSeqKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     if ([gAddSpeedHackActiveLogPath isEqualToString:oldPath]) gAddSpeedHackActiveLogPath = nil;
     gAddSpeedHackAdSessionID = nil;
@@ -875,15 +900,6 @@ static NSString *AddSpeedHackKnownProblemFamilyFromRecord(NSDictionary *record)
     return nil;
 }
 
-static void AddSpeedHackApplyProblemTailToWebView(WKWebView *webView)
-{
-    if (!webView || !gAddSpeedHackAdSessionNeedsProblemTail) return;
-    NSString *js = [NSString stringWithFormat:
-        @"(function(){try{window.__ash_problem_tail_seconds=%0.3f;if(window.__adspeed_apply_problem_tail)window.__adspeed_apply_problem_tail();return true;}catch(e){return false;}})()",
-        kAddSpeedHackProblemTailSeconds];
-    [webView evaluateJavaScript:js completionHandler:nil];
-}
-
 static void AddSpeedHackProbeWKWebView(WKWebView *webView, NSTimeInterval delay, NSString *sessionID)
 {
     if (!webView) return;
@@ -911,15 +927,31 @@ static void AddSpeedHackProbeWKWebView(WKWebView *webView, NSTimeInterval delay,
             [record addEntriesFromDictionary:identity];
 
             NSString *problemFamily = AddSpeedHackKnownProblemFamilyFromRecord(record);
-            if (problemFamily.length && !gAddSpeedHackAdSessionNeedsProblemTail) {
-                gAddSpeedHackAdSessionNeedsProblemTail = YES;
+            if (problemFamily.length) {
                 gAddSpeedHackAdSessionProblemTailReason = problemFamily;
             }
-            if (gAddSpeedHackAdSessionNeedsProblemTail) AddSpeedHackApplyProblemTailToWebView(webView);
+            /* v1.8.0 diagnostic-only: do not alter playback for known problem families. */
             record[@"real_ad_elapsed_seconds"] = @(gAddSpeedHackAdSessionStartTime > 0 ? MAX(0, AddSpeedHackNow() - gAddSpeedHackAdSessionStartTime) : 0.0);
             record[@"problem_tail_active"] = @(gAddSpeedHackAdSessionNeedsProblemTail);
             record[@"problem_tail_seconds"] = @(gAddSpeedHackAdSessionNeedsProblemTail ? kAddSpeedHackProblemTailSeconds : 0.0);
-            record[@"problem_tail_reason"] = gAddSpeedHackAdSessionProblemTailReason ?: @"";
+            record[@"problem_tail_reason"] = @"";
+            record[@"known_problem_family"] = gAddSpeedHackAdSessionProblemTailReason ?: @"";
+
+            NSArray *asyncEvents = [snapshot[@"async_diag_events"] isKindOfClass:[NSArray class]] ? snapshot[@"async_diag_events"] : @[];
+            NSInteger lastAsyncSeq = [objc_getAssociatedObject(webView, kAddSpeedHackWKLastAsyncDiagSeqKey) integerValue];
+            NSMutableArray *newAsyncEvents = [NSMutableArray array];
+            NSInteger newestAsyncSeq = lastAsyncSeq;
+            for (id item in asyncEvents) {
+                if (![item isKindOfClass:[NSDictionary class]]) continue;
+                NSInteger seq = [item[@"seq"] integerValue];
+                if (seq > lastAsyncSeq) [newAsyncEvents addObject:item];
+                if (seq > newestAsyncSeq) newestAsyncSeq = seq;
+            }
+            if (newestAsyncSeq > lastAsyncSeq) objc_setAssociatedObject(webView, kAddSpeedHackWKLastAsyncDiagSeqKey, @(newestAsyncSeq), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            if (newAsyncEvents.count > 0) {
+                record[@"async_events_new"] = newAsyncEvents;
+                record[@"async_events_new_count"] = @(newAsyncEvents.count);
+            }
 
             NSInteger videoCount = [snapshot[@"video_count"] integerValue];
             NSInteger canvasCount = [snapshot[@"canvas_count"] integerValue];
