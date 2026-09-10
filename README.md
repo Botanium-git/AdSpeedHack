@@ -34,7 +34,7 @@
 - No reward callback or server-completion spoofing.
 
 
-## v1.8.0
+## v1.8.1
 - Restores full-speed behavior for all ads; the v1.7.0 20-second normal-speed tail is disabled.
 - Keeps known-problem-family tagging for Gossip Harbor / Meje Kyodan style assets, but does not infer reward success.
 - Adds read-only asynchronous diagnostics for resource loads, fetch/XHR, window message events, visibility/page lifecycle, and video playing/ended events.

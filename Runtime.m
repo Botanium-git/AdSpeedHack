@@ -2,12 +2,13 @@
 #import <AVFoundation/AVFoundation.h>
 #import <WebKit/WebKit.h>
 #import <objc/runtime.h>
+#include <math.h>
 
-static NSString * const kAddSpeedHackVersion = @"1.8.0";
+static NSString * const kAddSpeedHackVersion = @"1.8.1";
 static NSString * const kAddSpeedHackLogDirectory = @"AdSpeedHackLogs";
-static NSString * const kAddSpeedHackVersionDirectory = @"ver.1.8.0";
-static NSString * const kAddSpeedHackLogStem = @"ASH_ver.1.8.0_log";
-static NSString * const kAddSpeedHackBatchStem = @"ASH_ver.1.8.0_batch";
+static NSString * const kAddSpeedHackVersionDirectory = @"ver.1.8.1";
+static NSString * const kAddSpeedHackLogStem = @"ASH_ver.1.8.1_log";
+static NSString * const kAddSpeedHackBatchStem = @"ASH_ver.1.8.1_batch";
 
 static dispatch_queue_t AddSpeedHackLogQueue(void)
 {
@@ -690,7 +691,7 @@ static NSString *AdSpeedDiagnosticScript(void)
     "for(var j=0;j<fs.length;j++){"
     "var f=fs[j],r=null;"
     "try{r=f.getBoundingClientRect();}catch(e){}"
-    "var sameOrigin=false,childVideoCount=null,childCanvasCount=null,childIframeCount=null,childURL='';"
+    "var sameOrigin=false,crossOriginBlocked=false,childVideoCount=null,childCanvasCount=null,childIframeCount=null,childURL='',sandboxValue='',allowValue='';"
     "try{"
     "var d=f.contentDocument;"
     "if(d){"
@@ -700,11 +701,17 @@ static NSString *AdSpeedDiagnosticScript(void)
     "childIframeCount=d.querySelectorAll('iframe').length;"
     "try{childURL=String(f.contentWindow.location.href||'');}catch(e){}"
     "}"
-    "}catch(e){}"
+    "}catch(e){crossOriginBlocked=true;}"
+    "try{sandboxValue=String(f.getAttribute('sandbox')||'');}catch(e){}"
+    "try{allowValue=String(f.getAttribute('allow')||'');}catch(e){}"
     "iframes.push({"
     "src:String(f.src||''),"
     "same_origin:sameOrigin,"
+    "cross_origin_blocked:crossOriginBlocked,"
     "child_url:childURL,"
+    "sandbox:sandboxValue,"
+    "allow:allowValue,"
+    "visible:!!(r&&r.width>1&&r.height>1),"
     "child_video_count:childVideoCount,"
     "child_canvas_count:childCanvasCount,"
     "child_iframe_count:childIframeCount,"
@@ -713,11 +720,17 @@ static NSString *AdSpeedDiagnosticScript(void)
     "});"
     "}"
     "}catch(e){}"
+    "var iframeSameOriginCount=0,iframeCrossOriginCount=0,iframeVisibleCount=0,iframeChildVideoCount=0;"
+    "try{for(var k=0;k<iframes.length;k++){var q=iframes[k];if(q.same_origin)iframeSameOriginCount++;else iframeCrossOriginCount++;if(q.visible)iframeVisibleCount++;if(Number(q.child_video_count||0)>0)iframeChildVideoCount+=Number(q.child_video_count||0);}}catch(e){}"
     "return {"
     "page_url:String(location.href||''),"
     "video_count:vs.length,"
     "canvas_count:canvasCount,"
     "iframe_count:iframeCount,"
+    "iframe_same_origin_count:iframeSameOriginCount,"
+    "iframe_cross_origin_count:iframeCrossOriginCount,"
+    "iframe_visible_count:iframeVisibleCount,"
+    "iframe_child_video_count:iframeChildVideoCount,"
     "iframes:iframes,"
     "videos:videos,"
     "runtime_installed:!!window.__adspeed_runtime_v2,"
@@ -758,6 +771,7 @@ static BOOL gAddSpeedHackAdSessionNeedsProblemTail = NO;
 static NSString *gAddSpeedHackAdSessionProblemTailReason = nil;
 static const double kAddSpeedHackProblemTailSeconds = 20.0;
 static const NSTimeInterval kAddSpeedHackSessionRemovalGraceSeconds = 6.0;
+static NSTimeInterval gAddSpeedHackAdSessionEmptySinceTime = 0;
 
 static NSTimeInterval AddSpeedHackNow(void)
 {
@@ -784,6 +798,7 @@ static void AddSpeedHackResetAdSessionState(void)
     gAddSpeedHackAdSessionStartTime = 0;
     gAddSpeedHackAdSessionNeedsProblemTail = NO;
     gAddSpeedHackAdSessionProblemTailReason = nil;
+    gAddSpeedHackAdSessionEmptySinceTime = 0;
     gAddSpeedHackAdSessionParticipants = nil;
 }
 
@@ -816,7 +831,24 @@ static NSString *AddSpeedHackEnsureAdSession(WKWebView *webView, BOOL strongEvid
 {
     if (!strongEvidence && !weakEvidence) return nil;
 
-    if (AddSpeedHackAdSessionIsStale()) AddSpeedHackEndAdSession(@"stale_before_new_evidence");
+    if (AddSpeedHackAdSessionIsStale()) {
+        NSTimeInterval now = AddSpeedHackNow();
+        BOOL reconnectDuringRemovalGrace = (
+            gAddSpeedHackAdSessionEmptySinceTime > 0 &&
+            (now - gAddSpeedHackAdSessionEmptySinceTime) <= kAddSpeedHackSessionRemovalGraceSeconds
+        );
+        if (reconnectDuringRemovalGrace && gAddSpeedHackAdSessionLogPath.length) {
+            AddSpeedHackWriteLogToPath(@{
+                @"event": @"ad_session_reconnected_during_removal_grace",
+                @"ad_session_id": gAddSpeedHackAdSessionID ?: @"",
+                @"stale_gap_seconds": @(gAddSpeedHackAdSessionLastEvidenceTime > 0 ? MAX(0, now - gAddSpeedHackAdSessionLastEvidenceTime) : 0.0),
+                @"empty_gap_seconds": @(MAX(0, now - gAddSpeedHackAdSessionEmptySinceTime)),
+                @"reason": reason ?: @"new_evidence"
+            }, gAddSpeedHackAdSessionLogPath);
+        } else {
+            AddSpeedHackEndAdSession(@"stale_before_new_evidence");
+        }
+    }
 
     BOOL created = NO;
     if (gAddSpeedHackAdSessionLogPath.length == 0) {
@@ -839,6 +871,7 @@ static NSString *AddSpeedHackEnsureAdSession(WKWebView *webView, BOOL strongEvid
     if (!gAddSpeedHackAdSessionParticipants) gAddSpeedHackAdSessionParticipants = [NSHashTable weakObjectsHashTable];
     if (webView) {
         [gAddSpeedHackAdSessionParticipants addObject:webView];
+        gAddSpeedHackAdSessionEmptySinceTime = 0;
         objc_setAssociatedObject(webView, kAddSpeedHackWKParticipantKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         objc_setAssociatedObject(webView, kAddSpeedHackWKLogPathKey, gAddSpeedHackAdSessionLogPath, OBJC_ASSOCIATION_COPY_NONATOMIC);
         objc_setAssociatedObject(webView, kAddSpeedHackWKLogStartedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -968,6 +1001,20 @@ static void AddSpeedHackProbeWKWebView(WKWebView *webView, NSTimeInterval delay,
             knownSurface = (videoCount > 0 || canvasCount > 0);
             record[@"handled_html_surface_detected_this_probe"] = @(knownSurface);
             record[@"iframe_only_candidate"] = @(iframeCount > 0 && videoCount == 0 && canvasCount == 0);
+
+            if (videoCount == 0 && canvasCount == 0) {
+                NSInteger crossOriginCount = [snapshot[@"iframe_cross_origin_count"] integerValue];
+                NSInteger childVideoCount = [snapshot[@"iframe_child_video_count"] integerValue];
+                if (childVideoCount > 0) {
+                    record[@"unaccelerated_surface_reason"] = @"video_inside_same_origin_iframe_not_top_document";
+                } else if (iframeCount > 0 && crossOriginCount > 0) {
+                    record[@"unaccelerated_surface_reason"] = @"cross_origin_iframe_only_or_media_hidden_inside_iframe";
+                } else if (iframeCount > 0) {
+                    record[@"unaccelerated_surface_reason"] = @"iframe_only_no_top_level_video_or_canvas";
+                } else {
+                    record[@"unaccelerated_surface_reason"] = @"no_top_level_video_canvas_or_iframe_detected";
+                }
+            }
 
             if (knownSurface && isCurrentSession) {
                 objc_setAssociatedObject(webView,
@@ -1212,8 +1259,11 @@ static void SwizzleInstanceMethod(Class cls, SEL originalSEL, SEL replacementSEL
             @"native_page_url": self.URL.absoluteString ?: @""
         }, path);
         if (gAddSpeedHackAdSessionParticipants.allObjects.count == 0) {
+            NSTimeInterval emptySince = AddSpeedHackNow();
+            gAddSpeedHackAdSessionEmptySinceTime = emptySince;
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kAddSpeedHackSessionRemovalGraceSeconds * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                if (gAddSpeedHackAdSessionParticipants.allObjects.count == 0 && [path isEqualToString:gAddSpeedHackAdSessionLogPath]) {
+                BOOL sameEmptyGeneration = (gAddSpeedHackAdSessionEmptySinceTime > 0 && fabs(gAddSpeedHackAdSessionEmptySinceTime - emptySince) < 0.001);
+                if (sameEmptyGeneration && gAddSpeedHackAdSessionParticipants.allObjects.count == 0 && [path isEqualToString:gAddSpeedHackAdSessionLogPath]) {
                     AddSpeedHackEndAdSession(@"last_participating_webview_removed");
                 }
             });
