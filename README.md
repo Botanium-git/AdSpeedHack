@@ -40,3 +40,12 @@
 - Adds read-only asynchronous diagnostics for resource loads, fetch/XHR, window message events, visibility/page lifecycle, and video playing/ended events.
 - `wk_probe` includes only newly observed async events (`async_events_new`) to compare user-confirmed reward-success and reward-failure runs.
 - No reward callbacks or server completion are spoofed.
+
+
+## v1.8.2
+- Prevents weak `iframe_only_candidate` evidence from creating an ad session or consuming a JSONL log number.
+- Keeps iframe-only observations as in-memory candidates until stronger evidence appears.
+- Promotes candidates when top-level video/canvas evidence appears or same-origin iframe media is directly observable.
+- Adds viewport size, iframe child-canvas count, and maximum visible iframe area ratio diagnostics for future cross-origin iframe classification.
+- Weak candidates do not join existing ad sessions and do not reset the 6-second removal grace.
+- HTML5, playable, AVPlayer acceleration, fingerprinting, and reward-success semantics are unchanged.

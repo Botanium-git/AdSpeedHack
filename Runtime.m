@@ -4,11 +4,11 @@
 #import <objc/runtime.h>
 #include <math.h>
 
-static NSString * const kAddSpeedHackVersion = @"1.8.1";
+static NSString * const kAddSpeedHackVersion = @"1.8.2";
 static NSString * const kAddSpeedHackLogDirectory = @"AdSpeedHackLogs";
-static NSString * const kAddSpeedHackVersionDirectory = @"ver.1.8.1";
-static NSString * const kAddSpeedHackLogStem = @"ASH_ver.1.8.1_log";
-static NSString * const kAddSpeedHackBatchStem = @"ASH_ver.1.8.1_batch";
+static NSString * const kAddSpeedHackVersionDirectory = @"ver.1.8.2";
+static NSString * const kAddSpeedHackLogStem = @"ASH_ver.1.8.2_log";
+static NSString * const kAddSpeedHackBatchStem = @"ASH_ver.1.8.2_batch";
 
 static dispatch_queue_t AddSpeedHackLogQueue(void)
 {
@@ -720,8 +720,10 @@ static NSString *AdSpeedDiagnosticScript(void)
     "});"
     "}"
     "}catch(e){}"
-    "var iframeSameOriginCount=0,iframeCrossOriginCount=0,iframeVisibleCount=0,iframeChildVideoCount=0;"
-    "try{for(var k=0;k<iframes.length;k++){var q=iframes[k];if(q.same_origin)iframeSameOriginCount++;else iframeCrossOriginCount++;if(q.visible)iframeVisibleCount++;if(Number(q.child_video_count||0)>0)iframeChildVideoCount+=Number(q.child_video_count||0);}}catch(e){}"
+    "var iframeSameOriginCount=0,iframeCrossOriginCount=0,iframeVisibleCount=0,iframeChildVideoCount=0,iframeChildCanvasCount=0,iframeMaxVisibleAreaRatio=0;"
+    "var viewportWidth=0,viewportHeight=0;"
+    "try{viewportWidth=Number(window.innerWidth||document.documentElement.clientWidth||0);viewportHeight=Number(window.innerHeight||document.documentElement.clientHeight||0);}catch(e){}"
+    "try{for(var k=0;k<iframes.length;k++){var q=iframes[k];if(q.same_origin)iframeSameOriginCount++;else iframeCrossOriginCount++;if(q.visible){iframeVisibleCount++;var vw=Math.max(0,viewportWidth),vh=Math.max(0,viewportHeight),iw=Math.max(0,Number(q.width||0)),ih=Math.max(0,Number(q.height||0));if(vw>0&&vh>0){var ar=Math.min(1,(iw*ih)/(vw*vh));if(ar>iframeMaxVisibleAreaRatio)iframeMaxVisibleAreaRatio=ar;}}if(Number(q.child_video_count||0)>0)iframeChildVideoCount+=Number(q.child_video_count||0);if(Number(q.child_canvas_count||0)>0)iframeChildCanvasCount+=Number(q.child_canvas_count||0);}}catch(e){}"
     "return {"
     "page_url:String(location.href||''),"
     "video_count:vs.length,"
@@ -731,6 +733,10 @@ static NSString *AdSpeedDiagnosticScript(void)
     "iframe_cross_origin_count:iframeCrossOriginCount,"
     "iframe_visible_count:iframeVisibleCount,"
     "iframe_child_video_count:iframeChildVideoCount,"
+    "iframe_child_canvas_count:iframeChildCanvasCount,"
+    "iframe_max_visible_area_ratio:iframeMaxVisibleAreaRatio,"
+    "viewport_width:viewportWidth,"
+    "viewport_height:viewportHeight,"
     "iframes:iframes,"
     "videos:videos,"
     "runtime_installed:!!window.__adspeed_runtime_v2,"
@@ -757,6 +763,7 @@ static const void *kAddSpeedHackWKParticipantKey = &kAddSpeedHackWKParticipantKe
 static const void *kAddSpeedHackAVLoggedKey = &kAddSpeedHackAVLoggedKey;
 static const void *kAddSpeedHackWKLastFingerprintKey = &kAddSpeedHackWKLastFingerprintKey;
 static const void *kAddSpeedHackWKLastAsyncDiagSeqKey = &kAddSpeedHackWKLastAsyncDiagSeqKey;
+static const void *kAddSpeedHackWKCandidateStateKey = &kAddSpeedHackWKCandidateStateKey;
 
 // v1.2.5: one parent ad session owns one log file. Individual WKWebViews join it.
 static NSString *gAddSpeedHackAdSessionID = nil;
@@ -802,6 +809,81 @@ static void AddSpeedHackResetAdSessionState(void)
     gAddSpeedHackAdSessionParticipants = nil;
 }
 
+
+static NSMutableDictionary *AddSpeedHackWeakCandidateState(WKWebView *webView, BOOL createIfNeeded)
+{
+    if (!webView) return nil;
+    NSMutableDictionary *state = objc_getAssociatedObject(webView, kAddSpeedHackWKCandidateStateKey);
+    if (!state && createIfNeeded) {
+        state = [@{
+            @"first_seen_time": @(AddSpeedHackNow()),
+            @"last_seen_time": @(AddSpeedHackNow()),
+            @"probe_count": @0,
+            @"max_visible_area_ratio": @0.0,
+            @"max_visible_iframe_count": @0,
+            @"max_same_origin_iframe_count": @0,
+            @"max_cross_origin_iframe_count": @0,
+            @"max_child_video_count": @0,
+            @"max_child_canvas_count": @0
+        } mutableCopy];
+        objc_setAssociatedObject(webView, kAddSpeedHackWKCandidateStateKey, state, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    return state;
+}
+
+static void AddSpeedHackObserveWeakIframeCandidate(WKWebView *webView, NSDictionary *snapshot)
+{
+    NSMutableDictionary *state = AddSpeedHackWeakCandidateState(webView, YES);
+    if (!state) return;
+
+    state[@"last_seen_time"] = @(AddSpeedHackNow());
+    state[@"probe_count"] = @([state[@"probe_count"] unsignedIntegerValue] + 1);
+
+    double visibleAreaRatio = [snapshot[@"iframe_max_visible_area_ratio"] doubleValue];
+    if (visibleAreaRatio > [state[@"max_visible_area_ratio"] doubleValue]) state[@"max_visible_area_ratio"] = @(visibleAreaRatio);
+
+    NSArray<NSString *> *keys = @[
+        @"iframe_visible_count",
+        @"iframe_same_origin_count",
+        @"iframe_cross_origin_count",
+        @"iframe_child_video_count",
+        @"iframe_child_canvas_count"
+    ];
+    NSArray<NSString *> *stateKeys = @[
+        @"max_visible_iframe_count",
+        @"max_same_origin_iframe_count",
+        @"max_cross_origin_iframe_count",
+        @"max_child_video_count",
+        @"max_child_canvas_count"
+    ];
+    for (NSUInteger i = 0; i < keys.count; i++) {
+        NSInteger value = [snapshot[keys[i]] integerValue];
+        if (value > [state[stateKeys[i]] integerValue]) state[stateKeys[i]] = @(value);
+    }
+}
+
+static NSDictionary *AddSpeedHackWeakCandidatePromotionRecord(WKWebView *webView, NSString *promotionReason)
+{
+    NSMutableDictionary *state = AddSpeedHackWeakCandidateState(webView, NO);
+    if (!state) return nil;
+
+    NSTimeInterval firstSeen = [state[@"first_seen_time"] doubleValue];
+    NSTimeInterval now = AddSpeedHackNow();
+    NSDictionary *record = @{
+        @"event": @"iframe_candidate_promoted",
+        @"promotion_reason": promotionReason ?: @"strong_evidence",
+        @"candidate_age_seconds": @(firstSeen > 0 ? MAX(0, now - firstSeen) : 0.0),
+        @"candidate_probe_count": state[@"probe_count"] ?: @0,
+        @"candidate_max_visible_area_ratio": state[@"max_visible_area_ratio"] ?: @0.0,
+        @"candidate_max_visible_iframe_count": state[@"max_visible_iframe_count"] ?: @0,
+        @"candidate_max_same_origin_iframe_count": state[@"max_same_origin_iframe_count"] ?: @0,
+        @"candidate_max_cross_origin_iframe_count": state[@"max_cross_origin_iframe_count"] ?: @0,
+        @"candidate_max_child_video_count": state[@"max_child_video_count"] ?: @0,
+        @"candidate_max_child_canvas_count": state[@"max_child_canvas_count"] ?: @0
+    };
+    objc_setAssociatedObject(webView, kAddSpeedHackWKCandidateStateKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    return record;
+}
 static void AddSpeedHackEndAdSession(NSString *reason)
 {
     NSString *path = gAddSpeedHackAdSessionLogPath;
@@ -829,7 +911,7 @@ static BOOL AddSpeedHackAdSessionIsStale(void)
 
 static NSString *AddSpeedHackEnsureAdSession(WKWebView *webView, BOOL strongEvidence, BOOL weakEvidence, NSString *reason)
 {
-    if (!strongEvidence && !weakEvidence) return nil;
+    if (!strongEvidence) return nil;
 
     if (AddSpeedHackAdSessionIsStale()) {
         NSTimeInterval now = AddSpeedHackNow();
@@ -1029,16 +1111,35 @@ static void AddSpeedHackProbeWKWebView(WKWebView *webView, NSTimeInterval delay,
         record[@"known_surface_detected_this_probe"] = @(knownSurface);
 
         BOOL iframeOnlyCandidate = [record[@"iframe_only_candidate"] boolValue];
-        BOOL strongEvidence = knownSurface;
-        BOOL weakEvidence = iframeOnlyCandidate;
-        NSString *reason = strongEvidence ? @"handled_html_surface" : (weakEvidence ? @"iframe_only_candidate" : @"none");
+        NSInteger iframeChildVideoCount = [record[@"iframe_child_video_count"] integerValue];
+        NSInteger iframeChildCanvasCount = [record[@"iframe_child_canvas_count"] integerValue];
+        BOOL sameOriginIframeMedia = (iframeChildVideoCount > 0 || iframeChildCanvasCount > 0);
+        BOOL strongEvidence = (knownSurface || sameOriginIframeMedia);
+        BOOL weakEvidence = (iframeOnlyCandidate && !strongEvidence);
+        NSString *reason = knownSurface ? @"handled_html_surface" : (sameOriginIframeMedia ? @"same_origin_iframe_media" : (weakEvidence ? @"iframe_only_candidate" : @"none"));
 
+        if (weakEvidence && [result isKindOfClass:[NSDictionary class]]) {
+            AddSpeedHackObserveWeakIframeCandidate(webView, (NSDictionary *)result);
+            NSMutableDictionary *candidateState = AddSpeedHackWeakCandidateState(webView, NO);
+            if (candidateState) {
+                record[@"iframe_candidate_state"] = @"pending";
+                record[@"iframe_candidate_probe_count"] = candidateState[@"probe_count"] ?: @0;
+                record[@"iframe_candidate_age_seconds"] = @([candidateState[@"first_seen_time"] doubleValue] > 0 ? MAX(0, AddSpeedHackNow() - [candidateState[@"first_seen_time"] doubleValue]) : 0.0);
+            }
+        }
+
+        NSDictionary *promotionRecord = strongEvidence ? AddSpeedHackWeakCandidatePromotionRecord(webView, reason) : nil;
         NSString *logPath = AddSpeedHackLogPathForWebView(webView, NO);
-        if (strongEvidence || weakEvidence) {
-            logPath = AddSpeedHackEnsureAdSession(webView, strongEvidence, weakEvidence, reason);
+        if (strongEvidence) {
+            logPath = AddSpeedHackEnsureAdSession(webView, YES, NO, reason);
         }
         BOOL logStarted = (logPath.length > 0);
         if (logStarted) {
+            if (promotionRecord) {
+                NSMutableDictionary *promotion = [promotionRecord mutableCopy];
+                promotion[@"ad_session_id"] = gAddSpeedHackAdSessionID ?: @"";
+                AddSpeedHackWriteLogToPath(promotion, logPath);
+            }
             record[@"ad_session_id"] = gAddSpeedHackAdSessionID ?: @"";
             record[@"ad_session_confidence"] = gAddSpeedHackAdSessionConfidence ?: @"low";
             record[@"ad_evidence_strength"] = strongEvidence ? @"strong" : (weakEvidence ? @"weak" : @"none");
@@ -1101,6 +1202,10 @@ static void ScheduleWKWebViewInjection(WKWebView *webView, BOOL beginNewAd, NSSt
     objc_setAssociatedObject(webView,
                              kAddSpeedHackWKHandledSurfaceKey,
                              @NO,
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(webView,
+                             kAddSpeedHackWKCandidateStateKey,
+                             nil,
                              OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
     NSMutableDictionary *navigationRecord = [@{
