@@ -51,8 +51,13 @@
 - HTML5, playable, AVPlayer acceleration, fingerprinting, and reward-success semantics are unchanged.
 
 
-## v1.8.3
+## v1.9.0
 - Accelerate same-origin iframe media/playable surfaces without changing the normal top-document acceleration path.
 - Patch timers inside same-origin iframe windows, accelerate child videos, apply seek boost, observe dynamic child content, and poke a large child canvas when applicable.
 - Add `iframe_acceleration_installed_count` diagnostic field.
 - Cross-origin iframe handling is unchanged.
+
+
+## v1.9.0 Gossip Harbor 25-second lead-in test
+
+For the existing `gossip_harbor_family` marker (`oe8f937c_` in the creative video asset), acceleration is deliberately held at real-time speed for the first 25 seconds after the marker is first observed. During the hold, HTML5 video playback is 1x, seek boost is paused, JS timer shortening is disabled, and canvas poke is deferred. After 25 seconds, the normal ASH acceleration profile resumes automatically. Other ads retain the existing acceleration behavior. Diagnostic probes include `gossip_hold_detected`, `gossip_hold_active`, `gossip_hold_elapsed_seconds`, and `gossip_hold_started_epoch_ms`.
