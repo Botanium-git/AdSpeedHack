@@ -4,11 +4,11 @@
 #import <objc/runtime.h>
 #include <math.h>
 
-static NSString * const kAddSpeedHackVersion = @"1.9.0";
+static NSString * const kAddSpeedHackVersion = @"1.10.0";
 static NSString * const kAddSpeedHackLogDirectory = @"AdSpeedHackLogs";
-static NSString * const kAddSpeedHackVersionDirectory = @"ver.1.9.0";
-static NSString * const kAddSpeedHackLogStem = @"ASH_ver.1.9.0_log";
-static NSString * const kAddSpeedHackBatchStem = @"ASH_ver.1.9.0_batch";
+static NSString * const kAddSpeedHackVersionDirectory = @"ver.1.10.0";
+static NSString * const kAddSpeedHackLogStem = @"ASH_ver.1.10.0_log";
+static NSString * const kAddSpeedHackBatchStem = @"ASH_ver.1.10.0_batch";
 
 static dispatch_queue_t AddSpeedHackLogQueue(void)
 {
@@ -440,7 +440,7 @@ static NSString *AdSpeedHTML5Script(void)
         "var SEEK_STEP=%0.3f;"
         "var SEEK_INTERVAL=%0.3f;"
         "var TIMER_SPEED=%0.3f;"
-        "var GOSSIP_HOLD_MS=25000;"
+        "var MINIMUM_REAL_MS=25000;"
         "var ENABLE_POKE=%@;"
         "var POKE_DELAY=%0.3f;"
         "var KEY='__adspeed_runtime_v2';"
@@ -469,11 +469,11 @@ static NSString *AdSpeedHTML5Script(void)
         "return !!v && String(v.tagName).toUpperCase()==='VIDEO';"
         "}"
 
-        "function gossipMarkerInDocument(d){"
-        "try{if(!d)return false;var vs=d.querySelectorAll('video');for(var i=0;i<vs.length;i++){var u=String(vs[i].currentSrc||vs[i].src||'').toLowerCase();if(u.indexOf('oe8f937c_')>=0)return true;}var ss=d.querySelectorAll('[src]');for(var j=0;j<ss.length;j++){var x=String(ss[j].getAttribute('src')||'').toLowerCase();if(x.indexOf('oe8f937c_')>=0)return true;}}catch(e){}return false;}"
-        "function gossipMarkerPresent(){try{if(gossipMarkerInDocument(document))return true;var fs=document.querySelectorAll('iframe');for(var i=0;i<fs.length;i++){try{if(gossipMarkerInDocument(fs[i].contentDocument))return true;}catch(e){}}}catch(e){}return false;}"
-        "function refreshGossipHold(){try{if(!window.__ash_gossip_hold_started_ms&&gossipMarkerPresent()){window.__ash_gossip_hold_started_ms=Date.now();window.__ash_gossip_hold_detected=true;ashPush('gossip_hold_started',{hold_ms:GOSSIP_HOLD_MS});}var st=Number(window.__ash_gossip_hold_started_ms||0);if(!(st>0))return false;var active=(Date.now()-st)<GOSSIP_HOLD_MS;if(!active&&!window.__ash_gossip_hold_released){window.__ash_gossip_hold_released=true;ashPush('gossip_hold_released',{elapsed_ms:Date.now()-st});}return active;}catch(e){return false;}}"
-        "function accelerationEnabled(){return !refreshGossipHold();}"
+        "function problemMarkerInDocument(d){"
+        "try{if(!d)return '';var ss=d.querySelectorAll('[src]');for(var i=0;i<ss.length;i++){var u=String(ss[i].currentSrc||ss[i].src||ss[i].getAttribute('src')||'').toLowerCase();if(u.indexOf('oe8f937c_')>=0)return 'gossip_harbor_family';if(u.indexOf('o9147b6a_')>=0)return 'voidpet_family';if(u.indexOf('o6b5ee74_')>=0)return 'meje_kyodan_family';}}catch(e){}return '';}"
+        "function problemFamilyPresent(){try{var f=problemMarkerInDocument(document);if(f)return f;var fs=document.querySelectorAll('iframe');for(var i=0;i<fs.length;i++){try{f=problemMarkerInDocument(fs[i].contentDocument);if(f)return f;}catch(e){}}}catch(e){}return '';}"
+        "function refreshMinimumRealTime(){try{var fam=problemFamilyPresent();if(fam&&!window.__ash_minimum_real_started_ms){window.__ash_minimum_real_started_ms=Date.now();window.__ash_minimum_real_family=fam;ashPush('minimum_real_time_started',{family:fam,minimum_ms:MINIMUM_REAL_MS});}var st=Number(window.__ash_minimum_real_started_ms||0);if(!(st>0))return false;var waiting=(Date.now()-st)<MINIMUM_REAL_MS;if(!waiting&&!window.__ash_minimum_real_released){window.__ash_minimum_real_released=true;ashPush('minimum_real_time_released',{family:window.__ash_minimum_real_family||'',elapsed_ms:Date.now()-st});}return waiting;}catch(e){return false;}}"
+        "function accelerationEnabled(){refreshMinimumRealTime();return true;}"
 
         "function problemTailActive(v){"
         "try{"
@@ -486,7 +486,7 @@ static NSString *AdSpeedHTML5Script(void)
 
         "function applyVideo(v){"
         "if(!isVideo(v))return;"
-        "var target=accelerationEnabled()?(problemTailActive(v)?1.0:VIDEO_RATE):1.0;"
+        "var target=problemTailActive(v)?1.0:VIDEO_RATE;"
         "try{v.defaultPlaybackRate=target;}catch(e){}"
         "try{"
         "if(Math.abs((v.playbackRate||1)-target)>0.001){"
@@ -518,9 +518,10 @@ static NSString *AdSpeedHTML5Script(void)
         "if(!isFinite(v.duration)||v.duration<=0)continue;"
         "if(problemTailActive(v)){applyVideo(v);continue;}"
         "var tail=Number(window.__ash_problem_tail_seconds||0);"
-        "var safeEnd=Math.max(0,v.duration-0.35);"
+        "var minWait=refreshMinimumRealTime();"
+        "var safeEnd=Math.max(0,v.duration-(minWait?2.0:0.35));"
         "if(tail>0)safeEnd=Math.min(safeEnd,Math.max(0,v.duration-tail));"
-        "if(v.currentTime>=safeEnd)continue;"
+        "if(v.currentTime>=safeEnd){if(minWait){try{v.pause();}catch(e){}continue;}try{if(v.paused)v.play();}catch(e){}continue;}"
         "var next=Math.min(v.currentTime+SEEK_STEP,safeEnd);"
         "if(next>v.currentTime)v.currentTime=next;"
         "}"
@@ -616,7 +617,7 @@ static NSString *AdSpeedHTML5Script(void)
         "if(!window[KEY]){"
         "window[KEY]=true;"
         "installAsyncDiagnostics();"
-        "refreshGossipHold();"
+        "refreshMinimumRealTime();"
         "installTimerAcceleration();"
         "installVideoSeekBoost();"
         "scanSameOriginFrames();"
@@ -631,7 +632,7 @@ static NSString *AdSpeedHTML5Script(void)
         "var v=e.target;"
         "if(!isVideo(v))return;"
         "try{"
-        "var target=accelerationEnabled()?(problemTailActive(v)?1.0:VIDEO_RATE):1.0;"
+        "var target=problemTailActive(v)?1.0:VIDEO_RATE;"
         "if(Math.abs((v.playbackRate||1)-target)>0.001){"
         "var st=window.__adspeed_nativeSetTimeout||window.setTimeout;"
         "st(function(){applyVideo(v);},0);"
@@ -776,11 +777,13 @@ static NSString *AdSpeedDiagnosticScript(void)
     "endcard_mode:!!window.__adspeed_endcard_mode,"
     "endcard_reason:String(window.__adspeed_endcard_reason||''),"
     "endcard_entered_epoch_ms:window.__adspeed_endcard_entered_ms?Number(window.__adspeed_endcard_entered_ms):null,"
-    "gossip_hold_detected:!!window.__ash_gossip_hold_detected,"
-    "gossip_hold_seconds:25,"
-    "gossip_hold_active:(function(){try{var s=Number(window.__ash_gossip_hold_started_ms||0);return s>0&&(Date.now()-s)<25000;}catch(e){return false;}})(),"
-    "gossip_hold_elapsed_seconds:(function(){try{var s=Number(window.__ash_gossip_hold_started_ms||0);return s>0?Math.max(0,(Date.now()-s)/1000):null;}catch(e){return null;}})(),"
-    "gossip_hold_started_epoch_ms:window.__ash_gossip_hold_started_ms?Number(window.__ash_gossip_hold_started_ms):null,"
+    "minimum_real_time_detected:!!window.__ash_minimum_real_started_ms,"
+    "minimum_real_time_family:String(window.__ash_minimum_real_family||''),"
+    "minimum_real_time_seconds:25,"
+    "minimum_real_time_waiting:(function(){try{var s=Number(window.__ash_minimum_real_started_ms||0);return s>0&&(Date.now()-s)<25000;}catch(e){return false;}})(),"
+    "minimum_real_time_elapsed_seconds:(function(){try{var s=Number(window.__ash_minimum_real_started_ms||0);return s>0?Math.max(0,(Date.now()-s)/1000):null;}catch(e){return null;}})(),"
+    "minimum_real_time_safe_to_close:(function(){try{var s=Number(window.__ash_minimum_real_started_ms||0);return s>0&&(Date.now()-s)>=25000;}catch(e){return false;}})(),"
+    "minimum_real_time_started_epoch_ms:window.__ash_minimum_real_started_ms?Number(window.__ash_minimum_real_started_ms):null,"
     "video_seek_installed:!!window.__adspeed_seek_timer,"
     "canvas_poke_applied:!!window.__adspeed_canvas_poked,"
     "async_diag_seq:(window.__ash_diag_v180&&window.__ash_diag_v180.seq)||0,"
@@ -816,6 +819,18 @@ static const double kAddSpeedHackProblemTailSeconds = 20.0;
 static const NSTimeInterval kAddSpeedHackSessionRemovalGraceSeconds = 6.0;
 static NSTimeInterval gAddSpeedHackAdSessionEmptySinceTime = 0;
 
+// v1.10.0: identity-aware short-gap reconnect. Fingerprints may evolve during one ad,
+// so keep every observed fingerprint for the active session.
+static NSMutableSet<NSString *> *gAddSpeedHackAdSessionFingerprints = nil;
+static NSMutableSet<NSString *> *gAddSpeedHackAdSessionCreativeIDs = nil;
+static NSString *gAddSpeedHackRecentEndedLogPath = nil;
+static NSString *gAddSpeedHackRecentEndedSessionID = nil;
+static NSSet<NSString *> *gAddSpeedHackRecentEndedFingerprints = nil;
+static NSSet<NSString *> *gAddSpeedHackRecentEndedCreativeIDs = nil;
+static NSTimeInterval gAddSpeedHackRecentEndedTime = 0;
+static NSTimeInterval gAddSpeedHackRecentEndedStartTime = 0;
+static const NSTimeInterval kAddSpeedHackFingerprintReconnectSeconds = 6.0;
+
 static NSTimeInterval AddSpeedHackNow(void)
 {
     return [NSDate timeIntervalSinceReferenceDate];
@@ -843,6 +858,8 @@ static void AddSpeedHackResetAdSessionState(void)
     gAddSpeedHackAdSessionProblemTailReason = nil;
     gAddSpeedHackAdSessionEmptySinceTime = 0;
     gAddSpeedHackAdSessionParticipants = nil;
+    gAddSpeedHackAdSessionFingerprints = nil;
+    gAddSpeedHackAdSessionCreativeIDs = nil;
 }
 
 
@@ -936,6 +953,16 @@ static void AddSpeedHackEndAdSession(NSString *reason)
             @"problem_tail_reason": gAddSpeedHackAdSessionProblemTailReason ?: @""
         }, path);
     }
+
+    // Keep only the immediately preceding session as a reconnect candidate.
+    if (path.length) {
+        gAddSpeedHackRecentEndedLogPath = [path copy];
+        gAddSpeedHackRecentEndedSessionID = [gAddSpeedHackAdSessionID copy];
+        gAddSpeedHackRecentEndedFingerprints = [gAddSpeedHackAdSessionFingerprints copy] ?: [NSSet set];
+        gAddSpeedHackRecentEndedCreativeIDs = [gAddSpeedHackAdSessionCreativeIDs copy] ?: [NSSet set];
+        gAddSpeedHackRecentEndedTime = AddSpeedHackNow();
+        gAddSpeedHackRecentEndedStartTime = gAddSpeedHackAdSessionStartTime;
+    }
     AddSpeedHackResetAdSessionState();
 }
 
@@ -945,7 +972,69 @@ static BOOL AddSpeedHackAdSessionIsStale(void)
     return (AddSpeedHackNow() - gAddSpeedHackAdSessionLastEvidenceTime) > kAddSpeedHackAdSessionStaleSeconds;
 }
 
-static NSString *AddSpeedHackEnsureAdSession(WKWebView *webView, BOOL strongEvidence, BOOL weakEvidence, NSString *reason)
+static BOOL AddSpeedHackCreativeIDsCompatible(NSArray *creativeIDs)
+{
+    if (![creativeIDs isKindOfClass:[NSArray class]] || creativeIDs.count == 0 ||
+        gAddSpeedHackRecentEndedCreativeIDs.count == 0) return YES;
+    for (id item in creativeIDs) {
+        if ([item isKindOfClass:[NSString class]] &&
+            [gAddSpeedHackRecentEndedCreativeIDs containsObject:item]) return YES;
+    }
+    return NO;
+}
+
+static BOOL AddSpeedHackTryReconnectRecentEndedSession(NSString *fingerprint,
+                                                        NSArray *creativeIDs,
+                                                        NSString *reason)
+{
+    if (gAddSpeedHackAdSessionLogPath.length > 0) return NO;
+    if (fingerprint.length == 0 || gAddSpeedHackRecentEndedLogPath.length == 0 ||
+        gAddSpeedHackRecentEndedSessionID.length == 0 || gAddSpeedHackRecentEndedTime <= 0) return NO;
+
+    NSTimeInterval now = AddSpeedHackNow();
+    NSTimeInterval gap = now - gAddSpeedHackRecentEndedTime;
+    if (gap < 0 || gap > kAddSpeedHackFingerprintReconnectSeconds) return NO;
+    if (![gAddSpeedHackRecentEndedFingerprints containsObject:fingerprint]) return NO;
+    if (!AddSpeedHackCreativeIDsCompatible(creativeIDs)) return NO;
+
+    gAddSpeedHackAdSessionID = [gAddSpeedHackRecentEndedSessionID copy];
+    gAddSpeedHackAdSessionLogPath = [gAddSpeedHackRecentEndedLogPath copy];
+    gAddSpeedHackAdSessionConfidence = @"high";
+    gAddSpeedHackAdSessionWeakSourceCount = 0;
+    gAddSpeedHackAdSessionLastEvidenceTime = now;
+    gAddSpeedHackAdSessionStartTime = gAddSpeedHackRecentEndedStartTime > 0 ? gAddSpeedHackRecentEndedStartTime : now;
+    gAddSpeedHackAdSessionNeedsProblemTail = NO;
+    gAddSpeedHackAdSessionProblemTailReason = nil;
+    gAddSpeedHackAdSessionEmptySinceTime = 0;
+    gAddSpeedHackAdSessionParticipants = [NSHashTable weakObjectsHashTable];
+    gAddSpeedHackAdSessionFingerprints = [gAddSpeedHackRecentEndedFingerprints mutableCopy] ?: [NSMutableSet set];
+    gAddSpeedHackAdSessionCreativeIDs = [gAddSpeedHackRecentEndedCreativeIDs mutableCopy] ?: [NSMutableSet set];
+    gAddSpeedHackActiveLogPath = gAddSpeedHackAdSessionLogPath;
+
+    AddSpeedHackWriteLogToPath(@{
+        @"event": @"ad_session_reconnected_by_fingerprint",
+        @"ad_session_id": gAddSpeedHackAdSessionID ?: @"",
+        @"ad_fingerprint": fingerprint,
+        @"gap_seconds": @(gap),
+        @"reason": reason ?: @"new_evidence",
+        @"creative_id_candidates": [creativeIDs isKindOfClass:[NSArray class]] ? creativeIDs : @[]
+    }, gAddSpeedHackAdSessionLogPath);
+
+    gAddSpeedHackRecentEndedLogPath = nil;
+    gAddSpeedHackRecentEndedSessionID = nil;
+    gAddSpeedHackRecentEndedFingerprints = nil;
+    gAddSpeedHackRecentEndedCreativeIDs = nil;
+    gAddSpeedHackRecentEndedTime = 0;
+    gAddSpeedHackRecentEndedStartTime = 0;
+    return YES;
+}
+
+static NSString *AddSpeedHackEnsureAdSession(WKWebView *webView,
+                                               BOOL strongEvidence,
+                                               BOOL weakEvidence,
+                                               NSString *reason,
+                                               NSString *fingerprint,
+                                               NSArray *creativeIDs)
 {
     if (!strongEvidence) return nil;
 
@@ -955,6 +1044,10 @@ static NSString *AddSpeedHackEnsureAdSession(WKWebView *webView, BOOL strongEvid
             gAddSpeedHackAdSessionEmptySinceTime > 0 &&
             (now - gAddSpeedHackAdSessionEmptySinceTime) <= kAddSpeedHackSessionRemovalGraceSeconds
         );
+        BOOL reconnectByActiveFingerprint = (
+            fingerprint.length > 0 &&
+            [gAddSpeedHackAdSessionFingerprints containsObject:fingerprint]
+        );
         if (reconnectDuringRemovalGrace && gAddSpeedHackAdSessionLogPath.length) {
             AddSpeedHackWriteLogToPath(@{
                 @"event": @"ad_session_reconnected_during_removal_grace",
@@ -963,8 +1056,18 @@ static NSString *AddSpeedHackEnsureAdSession(WKWebView *webView, BOOL strongEvid
                 @"empty_gap_seconds": @(MAX(0, now - gAddSpeedHackAdSessionEmptySinceTime)),
                 @"reason": reason ?: @"new_evidence"
             }, gAddSpeedHackAdSessionLogPath);
+        } else if (reconnectByActiveFingerprint && gAddSpeedHackAdSessionLogPath.length) {
+            AddSpeedHackWriteLogToPath(@{
+                @"event": @"ad_session_reconnected_by_fingerprint",
+                @"ad_session_id": gAddSpeedHackAdSessionID ?: @"",
+                @"ad_fingerprint": fingerprint,
+                @"stale_gap_seconds": @(gAddSpeedHackAdSessionLastEvidenceTime > 0 ? MAX(0, now - gAddSpeedHackAdSessionLastEvidenceTime) : 0.0),
+                @"reason": reason ?: @"new_evidence",
+                @"creative_id_candidates": [creativeIDs isKindOfClass:[NSArray class]] ? creativeIDs : @[]
+            }, gAddSpeedHackAdSessionLogPath);
         } else {
             AddSpeedHackEndAdSession(@"stale_before_new_evidence");
+            AddSpeedHackTryReconnectRecentEndedSession(fingerprint, creativeIDs, reason);
         }
     }
 
@@ -982,6 +1085,8 @@ static NSString *AddSpeedHackEnsureAdSession(WKWebView *webView, BOOL strongEvid
         gAddSpeedHackAdSessionNeedsProblemTail = NO;
         gAddSpeedHackAdSessionProblemTailReason = nil;
         gAddSpeedHackAdSessionParticipants = [NSHashTable weakObjectsHashTable];
+        gAddSpeedHackAdSessionFingerprints = [NSMutableSet set];
+        gAddSpeedHackAdSessionCreativeIDs = [NSMutableSet set];
         created = YES;
         gAddSpeedHackActiveLogPath = newPath;
     }
@@ -1046,6 +1151,7 @@ static NSString *AddSpeedHackKnownProblemFamilyFromRecord(NSDictionary *record)
     for (id item in parts) {
         NSString *part = [item isKindOfClass:[NSString class]] ? [item lowercaseString] : @"";
         if ([part containsString:@"file://oe8f937c_"]) return @"gossip_harbor_family";
+        if ([part containsString:@"file://o9147b6a_"]) return @"voidpet_family";
         if ([part containsString:@"file://o6b5ee74_"]) return @"meje_kyodan_family";
     }
     return nil;
@@ -1087,6 +1193,9 @@ static void AddSpeedHackProbeWKWebView(WKWebView *webView, NSTimeInterval delay,
             record[@"problem_tail_seconds"] = @(gAddSpeedHackAdSessionNeedsProblemTail ? kAddSpeedHackProblemTailSeconds : 0.0);
             record[@"problem_tail_reason"] = @"";
             record[@"known_problem_family"] = gAddSpeedHackAdSessionProblemTailReason ?: @"";
+            record[@"minimum_real_time_rule_seconds"] = @25.0;
+            record[@"minimum_real_time_rule_family"] = [snapshot[@"minimum_real_time_family"] isKindOfClass:[NSString class]] ? snapshot[@"minimum_real_time_family"] : @"";
+            record[@"minimum_real_time_safe_to_close"] = @([snapshot[@"minimum_real_time_safe_to_close"] boolValue]);
 
             NSArray *asyncEvents = [snapshot[@"async_diag_events"] isKindOfClass:[NSArray class]] ? snapshot[@"async_diag_events"] : @[];
             NSInteger lastAsyncSeq = [objc_getAssociatedObject(webView, kAddSpeedHackWKLastAsyncDiagSeqKey) integerValue];
@@ -1111,8 +1220,7 @@ static void AddSpeedHackProbeWKWebView(WKWebView *webView, NSTimeInterval delay,
             BOOL canvasPokeApplied = [snapshot[@"canvas_poke_applied"] boolValue];
 
             record[@"html5_video_detected"] = @(videoCount > 0);
-            BOOL gossipHoldActive = [snapshot[@"gossip_hold_active"] boolValue];
-            record[@"html5_acceleration_applied"] = @(videoCount > 0 && runtimeInstalled && !gossipHoldActive);
+            record[@"html5_acceleration_applied"] = @(videoCount > 0 && runtimeInstalled);
             record[@"canvas_playable_detected"] = @(canvasCount > 0);
             record[@"canvas_processing_applied"] = @(canvasPokeApplied);
             record[@"iframe_detected"] = @(iframeCount > 0);
@@ -1167,8 +1275,21 @@ static void AddSpeedHackProbeWKWebView(WKWebView *webView, NSTimeInterval delay,
 
         NSDictionary *promotionRecord = strongEvidence ? AddSpeedHackWeakCandidatePromotionRecord(webView, reason) : nil;
         NSString *logPath = AddSpeedHackLogPathForWebView(webView, NO);
+        NSString *currentFingerprint = [record[@"ad_fingerprint"] isKindOfClass:[NSString class]] ? record[@"ad_fingerprint"] : @"";
+        NSArray *currentCreativeIDs = [record[@"creative_id_candidates"] isKindOfClass:[NSArray class]] ? record[@"creative_id_candidates"] : @[];
         if (strongEvidence) {
-            logPath = AddSpeedHackEnsureAdSession(webView, YES, NO, reason);
+            AddSpeedHackTryReconnectRecentEndedSession(currentFingerprint, currentCreativeIDs, reason);
+            logPath = AddSpeedHackEnsureAdSession(webView, YES, NO, reason, currentFingerprint, currentCreativeIDs);
+            if (currentFingerprint.length) {
+                if (!gAddSpeedHackAdSessionFingerprints) gAddSpeedHackAdSessionFingerprints = [NSMutableSet set];
+                [gAddSpeedHackAdSessionFingerprints addObject:currentFingerprint];
+            }
+            if (!gAddSpeedHackAdSessionCreativeIDs) gAddSpeedHackAdSessionCreativeIDs = [NSMutableSet set];
+            for (id creativeID in currentCreativeIDs) {
+                if ([creativeID isKindOfClass:[NSString class]] && [creativeID length] > 0) {
+                    [gAddSpeedHackAdSessionCreativeIDs addObject:creativeID];
+                }
+            }
         }
         BOOL logStarted = (logPath.length > 0);
         if (logStarted) {
@@ -1182,6 +1303,17 @@ static void AddSpeedHackProbeWKWebView(WKWebView *webView, NSTimeInterval delay,
             record[@"ad_evidence_strength"] = strongEvidence ? @"strong" : (weakEvidence ? @"weak" : @"none");
 
             NSString *fingerprint = [record[@"ad_fingerprint"] isKindOfClass:[NSString class]] ? record[@"ad_fingerprint"] : @"";
+            if (fingerprint.length) {
+                if (!gAddSpeedHackAdSessionFingerprints) gAddSpeedHackAdSessionFingerprints = [NSMutableSet set];
+                [gAddSpeedHackAdSessionFingerprints addObject:fingerprint];
+            }
+            NSArray *observedCreativeIDs = [record[@"creative_id_candidates"] isKindOfClass:[NSArray class]] ? record[@"creative_id_candidates"] : @[];
+            if (!gAddSpeedHackAdSessionCreativeIDs) gAddSpeedHackAdSessionCreativeIDs = [NSMutableSet set];
+            for (id creativeID in observedCreativeIDs) {
+                if ([creativeID isKindOfClass:[NSString class]] && [creativeID length] > 0) {
+                    [gAddSpeedHackAdSessionCreativeIDs addObject:creativeID];
+                }
+            }
             NSString *previousFingerprint = objc_getAssociatedObject(webView, kAddSpeedHackWKLastFingerprintKey);
             if (fingerprint.length && ![fingerprint isEqualToString:previousFingerprint]) {
                 objc_setAssociatedObject(webView, kAddSpeedHackWKLastFingerprintKey, fingerprint, OBJC_ASSOCIATION_COPY_NONATOMIC);
@@ -1309,7 +1441,7 @@ static void SwizzleInstanceMethod(Class cls, SEL originalSEL, SEL replacementSEL
                                  kAddSpeedHackAVLoggedKey,
                                  @YES,
                                  OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        NSString *logPath = AddSpeedHackEnsureAdSession(nil, YES, NO, @"avplayer_activity");
+        NSString *logPath = AddSpeedHackEnsureAdSession(nil, YES, NO, @"avplayer_activity", nil, nil);
         if (logPath.length) {
             AddSpeedHackWriteLogToPath(@{
                 @"event": @"avplayer_acceleration_applied",
