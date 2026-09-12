@@ -49,3 +49,10 @@
 - Adds viewport size, iframe child-canvas count, and maximum visible iframe area ratio diagnostics for future cross-origin iframe classification.
 - Weak candidates do not join existing ad sessions and do not reset the 6-second removal grace.
 - HTML5, playable, AVPlayer acceleration, fingerprinting, and reward-success semantics are unchanged.
+
+
+## v1.8.3
+- Accelerate same-origin iframe media/playable surfaces without changing the normal top-document acceleration path.
+- Patch timers inside same-origin iframe windows, accelerate child videos, apply seek boost, observe dynamic child content, and poke a large child canvas when applicable.
+- Add `iframe_acceleration_installed_count` diagnostic field.
+- Cross-origin iframe handling is unchanged.

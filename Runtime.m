@@ -4,11 +4,11 @@
 #import <objc/runtime.h>
 #include <math.h>
 
-static NSString * const kAddSpeedHackVersion = @"1.8.2";
+static NSString * const kAddSpeedHackVersion = @"1.8.3";
 static NSString * const kAddSpeedHackLogDirectory = @"AdSpeedHackLogs";
-static NSString * const kAddSpeedHackVersionDirectory = @"ver.1.8.2";
-static NSString * const kAddSpeedHackLogStem = @"ASH_ver.1.8.2_log";
-static NSString * const kAddSpeedHackBatchStem = @"ASH_ver.1.8.2_batch";
+static NSString * const kAddSpeedHackVersionDirectory = @"ver.1.8.3";
+static NSString * const kAddSpeedHackLogStem = @"ASH_ver.1.8.3_log";
+static NSString * const kAddSpeedHackBatchStem = @"ASH_ver.1.8.3_batch";
 
 static dispatch_queue_t AddSpeedHackLogQueue(void)
 {
@@ -586,11 +586,32 @@ static NSString *AdSpeedHTML5Script(void)
         "}catch(e){}"
         "}"
 
+        "function installSameOriginFrameAcceleration(f){"
+        "try{"
+        "var w=f.contentWindow,d=f.contentDocument;if(!w||!d)return false;"
+        "if(w.__adspeed_iframe_runtime_v1)return true;w.__adspeed_iframe_runtime_v1=true;"
+        "var nativeTO=w.setTimeout.bind(w),nativeIV=w.setInterval.bind(w);"
+        "w.setTimeout=function(fn,delay){var args=Array.prototype.slice.call(arguments,2),x=Number(delay);if(!isFinite(x))x=0;if(x>20)x=Math.max(4,x/TIMER_SPEED);return nativeTO(function(){if(typeof fn==='function')return fn.apply(w,args);try{return w.eval(String(fn));}catch(e){}},x);};"
+        "w.setInterval=function(fn,delay){var args=Array.prototype.slice.call(arguments,2),x=Number(delay);if(!isFinite(x))x=0;if(x>20)x=Math.max(8,x/TIMER_SPEED);return nativeIV(function(){if(typeof fn==='function')return fn.apply(w,args);try{return w.eval(String(fn));}catch(e){}},x);};"
+        "function childVideo(v){try{if(!v||String(v.tagName).toUpperCase()!=='VIDEO')return;v.defaultPlaybackRate=VIDEO_RATE;if(Math.abs((v.playbackRate||1)-VIDEO_RATE)>0.001)v.playbackRate=VIDEO_RATE;}catch(e){}}"
+        "function childScan(root){try{if(!root)return;if(root.nodeType===1&&String(root.tagName).toUpperCase()==='VIDEO')childVideo(root);if(root.querySelectorAll){var vs=root.querySelectorAll('video');for(var i=0;i<vs.length;i++)childVideo(vs[i]);var fs=root.querySelectorAll('iframe');for(var j=0;j<fs.length;j++)installSameOriginFrameAcceleration(fs[j]);}}catch(e){}}"
+        "childScan(d);"
+        "try{d.addEventListener('play',function(e){childVideo(e.target);},true);d.addEventListener('playing',function(e){childVideo(e.target);},true);d.addEventListener('loadedmetadata',function(e){childVideo(e.target);},true);}catch(e){}"
+        "try{new w.MutationObserver(function(rs){for(var i=0;i<rs.length;i++){var ns=rs[i].addedNodes||[];for(var j=0;j<ns.length;j++)childScan(ns[j]);}}).observe(d.documentElement||d,{childList:true,subtree:true});}catch(e){}"
+        "w.__adspeed_iframe_seek_timer=nativeIV(function(){try{var vs=d.querySelectorAll('video');for(var i=0;i<vs.length;i++){var v=vs[i];childVideo(v);if(v.paused||v.ended||!isFinite(v.duration)||v.duration<=0)continue;var safeEnd=Math.max(0,v.duration-0.35);if(v.currentTime<safeEnd)v.currentTime=Math.min(v.currentTime+SEEK_STEP,safeEnd);}}catch(e){}},SEEK_INTERVAL);"
+        "try{var cs=d.querySelectorAll('canvas'),best=null,area=0;for(var i=0;i<cs.length;i++){var r=cs[i].getBoundingClientRect(),a=Math.max(0,r.width)*Math.max(0,r.height);if(a>area&&r.width>=120&&r.height>=120){best=cs[i];area=a;}}if(ENABLE_POKE&&best){nativeTO(function(){try{var r=best.getBoundingClientRect(),x=r.left+r.width*0.5,y=r.top+r.height*0.5,c={bubbles:true,cancelable:true,clientX:x,clientY:y};try{best.dispatchEvent(new w.MouseEvent('mousedown',c));}catch(e){}try{best.dispatchEvent(new w.MouseEvent('mouseup',c));}catch(e){}try{best.dispatchEvent(new w.MouseEvent('click',c));}catch(e){}}catch(e){}},POKE_DELAY);}}catch(e){}"
+        "return true;"
+        "}catch(e){return false;}"
+        "}"
+        "function scanSameOriginFrames(){try{var fs=document.querySelectorAll('iframe');for(var i=0;i<fs.length;i++)installSameOriginFrameAcceleration(fs[i]);}catch(e){}}"
+
         "if(!window[KEY]){"
         "window[KEY]=true;"
         "installAsyncDiagnostics();"
         "installTimerAcceleration();"
         "installVideoSeekBoost();"
+        "scanSameOriginFrames();"
+        "try{var siv=window.__adspeed_nativeSetInterval||window.setInterval;window.__adspeed_iframe_scan_timer=siv(scanSameOriginFrames,250);}catch(e){}"
 
         "var events=['play','playing','loadedmetadata','loadeddata','canplay','canplaythrough'];"
         "for(var i=0;i<events.length;i++){"
@@ -720,10 +741,10 @@ static NSString *AdSpeedDiagnosticScript(void)
     "});"
     "}"
     "}catch(e){}"
-    "var iframeSameOriginCount=0,iframeCrossOriginCount=0,iframeVisibleCount=0,iframeChildVideoCount=0,iframeChildCanvasCount=0,iframeMaxVisibleAreaRatio=0;"
+    "var iframeSameOriginCount=0,iframeCrossOriginCount=0,iframeVisibleCount=0,iframeChildVideoCount=0,iframeChildCanvasCount=0,iframeMaxVisibleAreaRatio=0,iframeAccelerationInstalledCount=0;"
     "var viewportWidth=0,viewportHeight=0;"
     "try{viewportWidth=Number(window.innerWidth||document.documentElement.clientWidth||0);viewportHeight=Number(window.innerHeight||document.documentElement.clientHeight||0);}catch(e){}"
-    "try{for(var k=0;k<iframes.length;k++){var q=iframes[k];if(q.same_origin)iframeSameOriginCount++;else iframeCrossOriginCount++;if(q.visible){iframeVisibleCount++;var vw=Math.max(0,viewportWidth),vh=Math.max(0,viewportHeight),iw=Math.max(0,Number(q.width||0)),ih=Math.max(0,Number(q.height||0));if(vw>0&&vh>0){var ar=Math.min(1,(iw*ih)/(vw*vh));if(ar>iframeMaxVisibleAreaRatio)iframeMaxVisibleAreaRatio=ar;}}if(Number(q.child_video_count||0)>0)iframeChildVideoCount+=Number(q.child_video_count||0);if(Number(q.child_canvas_count||0)>0)iframeChildCanvasCount+=Number(q.child_canvas_count||0);}}catch(e){}"
+    "try{for(var k=0;k<iframes.length;k++){var q=iframes[k];if(q.same_origin){iframeSameOriginCount++;try{var ff=fs[k];if(ff&&ff.contentWindow&&ff.contentWindow.__adspeed_iframe_runtime_v1)iframeAccelerationInstalledCount++;}catch(e){}}else iframeCrossOriginCount++;if(q.visible){iframeVisibleCount++;var vw=Math.max(0,viewportWidth),vh=Math.max(0,viewportHeight),iw=Math.max(0,Number(q.width||0)),ih=Math.max(0,Number(q.height||0));if(vw>0&&vh>0){var ar=Math.min(1,(iw*ih)/(vw*vh));if(ar>iframeMaxVisibleAreaRatio)iframeMaxVisibleAreaRatio=ar;}}if(Number(q.child_video_count||0)>0)iframeChildVideoCount+=Number(q.child_video_count||0);if(Number(q.child_canvas_count||0)>0)iframeChildCanvasCount+=Number(q.child_canvas_count||0);}}catch(e){}"
     "return {"
     "page_url:String(location.href||''),"
     "video_count:vs.length,"
@@ -735,6 +756,7 @@ static NSString *AdSpeedDiagnosticScript(void)
     "iframe_child_video_count:iframeChildVideoCount,"
     "iframe_child_canvas_count:iframeChildCanvasCount,"
     "iframe_max_visible_area_ratio:iframeMaxVisibleAreaRatio,"
+    "iframe_acceleration_installed_count:iframeAccelerationInstalledCount,"
     "viewport_width:viewportWidth,"
     "viewport_height:viewportHeight,"
     "iframes:iframes,"
